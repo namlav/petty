@@ -1,68 +1,41 @@
-# Prerequisites
+# ---- PlatformIO / firmware ----
+.pio/
+.pioenvs/
+.piolibdeps/
+firmware/.pio/
 *.d
-
-# Compiled Object files
-*.slo
-*.lo
 *.o
 *.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-*.so.*
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
 *.a
 *.lib
-
-# Executables
 *.exe
-*.out
-*.app
+*.elf
+*.bin
+*.map
 
-# Build directories
-build/
-Build/
-build-*/
+# ---- Node.js / backend ----
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.env
+.env.*
+!.env.example
 
-# CMake generated files
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-install_manifest.txt
-compile_commands.json
-
-# Temporary files
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
 *.tmp
 *.log
 *.bak
 *.swp
+.vscode/
+*.local.json
 
-# vcpkg
-vcpkg_installed/
+# ---- Local secrets ----
+petty-supabase-proj-pw.txt
 
-# debug information files
-*.dwo
-
-# test output & cache
-Testing/
+# ---- Tooling caches ----
 .cache/
+Testing/
+agent/
+.codegraph/

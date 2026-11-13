@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pet Feeder IoT · Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>🐾 Pet Feeder IoT</h1>
+      <p class="muted">Giám sát &amp; điều khiển thời gian thực qua WebSocket</p>
+    </div>
+    <div class="topbar-right">
+      <div class="conn" role="status" aria-live="polite">
+        <span id="wsDot" class="dot"></span>
+        <span id="wsLabel">Đang kết nối gateway…</span>
+      </div>
+      <div class="token-box">
+        <label for="token">JWT token</label>
+        <input id="token" type="password" placeholder="Bỏ trống nếu demo" autocomplete="off">
+        <button id="connectBtn" type="button" class="ghost">Kết nối</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="cards" aria-label="Thông số thiết bị">
+      <article class="card">
+        <h2>Khối lượng bát</h2>
+        <p class="value"><span id="weight">--</span><small>g</small></p>
+        <p class="muted">Loadcell HX711 · Median + EMA</p>
+      </article>
+      <article class="card">
+        <h2>Hạt trong thùng</h2>
+        <p class="value"><span id="level">--</span><small>%</small></p>
+        <div class="bar" aria-hidden="true"><span id="levelBar"></span></div>
+      </article>
+      <article class="card">
+        <h2>Thiết bị</h2>
+        <p id="deviceState" class="pill offline">--</p>
+        <p class="muted" id="lastSeen">Chưa có dữ liệu</p>
+      </article>
+      <article class="card">
+        <h2>Ring Buffer</h2>
+        <p class="value"><span id="buffered">0</span><small>gói</small></p>
+        <p class="muted">RAM + LittleFS chờ ACK</p>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Điều khiển</h2>
+        <span class="muted" id="scheduleInfo">Chưa có lịch hẹn.</span>
+      </div>
+      <div class="controls">
+        <label class="field">
+          Khẩu phần (g)
+          <input id="feedGrams" type="number" min="1" max="200" value="30">
+        </label>
+        <button id="feedBtn" type="button" class="primary">🍖 Cho ăn ngay</button>
+        <button id="stopBtn" type="button" class="danger">🛑 Dừng khẩn cấp</button>
+      </div>
+      <form id="scheduleForm" class="schedule">
+        <label class="field">
+          Giờ hẹn
+          <input id="schedTime" type="time" value="07:30" required>
+        </label>
+        <label class="field">
+          Mục tiêu (g)
+          <input id="schedGrams" type="number" min="1" max="200" value="30">
+        </label>
+        <label class="check">
+          <input id="schedEnabled" type="checkbox">
+          Bật lịch
+        </label>
+        <button type="submit" class="ghost">Lưu lịch</button>
+      </form>
+    </section>
+
+    <div class="grid-2">
+      <section class="panel">
+        <h2>Khối lượng &amp; mức hạt</h2>
+        <div class="chart-wrap"><canvas id="liveChart"></canvas></div>
+      </section>
+      <section class="panel">
+        <h2>Tiêu thụ theo giờ (g)</h2>
+        <div class="chart-wrap"><canvas id="consumptionChart"></canvas></div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>Theo dõi đồng bộ WebSocket</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Thời gian</th>
+              <th>Seq</th>
+              <th>Khối lượng</th>
+              <th>Mức hạt</th>
+              <th>Trạng thái</th>
+              <th>Lỗi</th>
+              <th>Nguồn</th>
+            </tr>
+          </thead>
+          <tbody id="logBody">
+            <tr><td colspan="7" class="muted">Đang chờ telemetry…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="muted">
+    Petty · ESP32 + Wokwi · Node.js WebSocket Gateway · Supabase (PostgreSQL + RLS)
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

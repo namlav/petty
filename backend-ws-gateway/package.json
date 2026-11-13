@@ -1,0 +1,19 @@
+{
+  "name": "petty-ws-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WebSocket gateway: ESP32 telemetry -> ACK -> Supabase + dashboard",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}
