@@ -17,6 +17,7 @@ firmware/.pio/
 node_modules/
 npm-debug.log*
 yarn-error.log*
+backend-ws-gateway/telemetry-spool.jsonl*
 .env
 .env.*
 !.env.example

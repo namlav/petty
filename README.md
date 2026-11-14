@@ -28,7 +28,7 @@ petty/
 │   ├── data/                 # Phân vùng LittleFS (chứa .keep)
 │   ├── diagram.json          # Sơ đồ Wokwi (HX711, A4988 + stepper, HC-SR04, OLED, nút, LED)
 │   ├── platformio.ini
-│   └── wokwi.toml            # Build path + net.forward localhost:8080
+│   └── wokwi.toml            # Build path + Wokwi full-flash configuration
 ├── backend-ws-gateway/       # [SV2 + SV3] WebSocket server
 │   ├── server.js
 │   ├── package.json
@@ -86,9 +86,9 @@ pio run -t upload       # nạp board thật (nếu có)
 1. Mở thư mục `firmware/` bằng VS Code (PlatformIO tự nhận project).
 2. Build trước để có `.pio/build/esp32dev/firmware.bin` / `.elf`.
 3. `Ctrl+Shift+P` → **Wokwi: Start Simulator** (hoặc bấm icon Wokwi trên thanh trạng thái).
-4. Bật gateway trước khi khởi động mô phỏng để ESP32 kết nối được ngay (`wokwi.toml` đã forward `localhost:8080` → `target:8080`).
+4. Bật backend gateway trước khi khởi động mô phỏng. Để ESP32 trong Wokwi kết nối tới localhost, cần bật **Wokwi Private IoT Gateway**.
 
-ESP32 trong Wokwi dùng Wi-Fi ảo `Wokwi-GUEST`; firmware kết nối `ws://target:8080/ws` (xem `firmware/include/config.h`). Với phần cứng thật, đổi `WS_HOST` thành IP LAN của máy chạy gateway và cập nhật `WS_PATH`/`DEVICE_TOKEN` nếu cần.
+ESP32 trong Wokwi dùng Wi-Fi ảo `Wokwi-GUEST`; với Private IoT Gateway, firmware kết nối `ws://host.wokwi.internal:8080/ws` (xem `firmware/include/config.h`). Public Gateway không truy cập được dịch vụ localhost. Với phần cứng thật, đổi `WS_HOST` thành IP LAN của máy chạy gateway và cập nhật `WS_PATH`/`DEVICE_TOKEN` nếu cần.
 
 ### Sơ đồ chân (khớp `firmware/diagram.json`)
 
@@ -123,11 +123,12 @@ ESP32 trong Wokwi dùng Wi-Fi ảo `Wokwi-GUEST`; firmware kết nối `ws://tar
 
 * **Bộ lọc SV1:** median cửa sổ 5 → EMA `α = 0.25`; xác nhận ổn định khi max-min của 5 mẫu < 1.0 g.
 * **Gói tin SV2:** `TelemetryRecord` packed **16 byte** (lưu RAM/Flash), JSON rút gọn khi truyền. Trường `q` (tuỳ chọn) báo số gói còn trong buffer để dashboard hiển thị.
-* **Ring Buffer 2 tầng:** RAM 64 bản ghi (1 KB) khi online chờ ACK; LittleFS `/offline_queue.bin` tối đa 500 bản ghi (~8 KB) khi offline. Khi mất kết nối, các gói RAM chưa ACK được đẩy xuống Flash để không mất dữ liệu.
+* **Lưu bền hai chặng:** ESP32 giữ ring buffer RAM 64 bản ghi và LittleFS 500 bản ghi khi offline; Gateway ghi telemetry vào JSONL spool và `fsync` trước ACK. Gateway tự gửi FIFO lên Supabase và giữ bản ghi pending khi cloud lỗi. Queue ESP32 đầy thì từ chối gói mới thay vì ghi đè gói chưa ACK.
 * **Backoff:** `min(1 s × 2ⁿ, 30 s)`, heartbeat WebSocket 10 s.
 * **Lịch hẹn:** lưu trong RAM thiết bị (mất khi reboot) và được đồng bộ lại từ dashboard/gateway khi có kết nối; bản lưu bền nằm ở bảng `feeding_schedules`.
 * **Hiệu chuẩn loadcell:** sửa `HX711_COUNTS_PER_GRAM` trong `config.h` (`raw / khối lượng đã biết`), và tare khi khay rỗng.
 * **Thời gian:** firmware đồng bộ NTP (UTC+7) cho lịch hẹn; nếu chưa có NTP, timestamp dùng mốc tăng dần để ACK/dedup vẫn hoạt động.
+* **Thiết kế gói tin và luồng phục hồi:** xem [docs/offline-sync.md](docs/offline-sync.md) (schema JSON, ACK, spool Gateway, giới hạn và sơ đồ Mermaid).
 
 ## 8. Phân công file (tránh xung đột Git)
 

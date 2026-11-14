@@ -26,14 +26,14 @@ class RingBuffer {
   bool begin();
 
   // ----- Tầng RAM (gói mới / chờ ACK khi online) -----
-  void push(const TelemetryRecord& rec);
+  bool push(const TelemetryRecord& rec);
   bool peek(TelemetryRecord& out) const;
   void pop();
   bool isEmpty() const { return _count == 0; }
   uint16_t count() const { return _count; }
 
   // ----- Tầng Flash (offline / sự kiện quan trọng) -----
-  void pushFlash(const TelemetryRecord& rec);
+  bool pushFlash(const TelemetryRecord& rec);
   bool peekFlash(TelemetryRecord& out) const;
   void popFlash();
   uint16_t flashCount() const { return _flashCount; }

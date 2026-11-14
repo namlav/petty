@@ -57,9 +57,9 @@
 // Wokwi ESP32 dùng WiFi ảo Wokwi-GUEST (không mật khẩu).
 #define WIFI_SSID "Wokwi-GUEST"
 #define WIFI_PASSWORD ""
-// Với Wokwi VS Code: "target" được ánh xạ bởi [[net.forward]] trong wokwi.toml.
+// Wokwi Private IoT Gateway ánh xạ máy tính thành host.wokwi.internal.
 // Với phần cứng thật: đổi thành IP LAN của máy chạy backend-ws-gateway.
-#define WS_HOST "target"
+#define WS_HOST "host.wokwi.internal"
 #define WS_PORT 8080
 #define WS_PATH "/ws?role=device&token=dev-device-token"
 #define DEVICE_ID "esp01"
