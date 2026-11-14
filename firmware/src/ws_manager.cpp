@@ -71,10 +71,20 @@ void WsManager::publish(const TelemetryRecord& rec) {
     return;
   }
   if (_connected && _state == STATE_ONLINE_NORMAL) {
-    _rb->push(rec);
+    if (!_rb->push(rec)) {
+      // Queue RAM đầy thì thử hàng đợi bền; không ghi đè gói chưa ACK.
+      if (!_rb->pushFlash(rec)) {
+        Serial.printf("[WS] MẤT telemetry s=%lu: mọi queue đều đầy/lỗi\n",
+                      (unsigned long)rec.seq);
+      }
+    }
   } else {
     // Mất mạng hoặc đang đồng bộ: ghi bền xuống LittleFS.
-    _rb->pushFlash(rec);
+    if (!_rb->pushFlash(rec)) {
+      Serial.printf("[WS] Không thể lưu telemetry s=%lu - queue đầy/lỗi\n",
+                    (unsigned long)rec.seq);
+      return;
+    }
     Serial.printf("[WS] Buffer offline s=%lu (tong %u)\n",
                   (unsigned long)rec.seq, (unsigned)_rb->pendingCount());
   }

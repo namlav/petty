@@ -11,6 +11,7 @@
 require('dotenv').config();
 
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const crypto = require('crypto');
 const express = require('express');
@@ -22,6 +23,8 @@ const DEVICE_TOKEN = process.env.DEVICE_TOKEN || 'dev-device-token';
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SUPABASE_KEY =
   process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY || '';
+// Append-only local spool: ACK chỉ sau khi bản ghi đã được fsync xuống đĩa.
+const SPOOL_PATH = process.env.TELEMETRY_SPOOL_PATH || path.join(__dirname, 'telemetry-spool.jsonl');
 
 // ------------------------------------------------------------
 // JWT (HS256) bằng crypto có sẵn - không thêm dependency
@@ -111,8 +114,57 @@ const deviceSockets = new Set();
 const dashboardSockets = new Set();
 const recentTelemetry = [];
 const seenPackets = new Set();
+const pendingSpool = [];
+let flushingSpool = false;
 const MAX_RECENT = 500;
 const MAX_SEEN = 5000;
+
+function loadSpool() {
+  if (!fs.existsSync(SPOOL_PATH)) return;
+  const text = fs.readFileSync(SPOOL_PATH, 'utf8');
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const record = JSON.parse(line);
+      pendingSpool.push(record);
+      rememberPacket(`${record.device_id}:${record.seq_num}`);
+    } catch (error) {
+      console.error('[SPOOL] Bỏ qua dòng hỏng:', error.message);
+    }
+  }
+  console.log(`[SPOOL] Khôi phục ${pendingSpool.length} bản ghi chờ`);
+}
+
+function appendSpool(record) {
+  try {
+    fs.mkdirSync(path.dirname(SPOOL_PATH), { recursive: true });
+    const fd = fs.openSync(SPOOL_PATH, 'a');
+    try {
+      fs.writeSync(fd, `${JSON.stringify(record)}\n`);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    pendingSpool.push(record);
+    return true;
+  } catch (error) {
+    console.error('[SPOOL] Không ghi bền được telemetry:', error.message);
+    return false;
+  }
+}
+
+function compactSpool() {
+  const temporary = `${SPOOL_PATH}.tmp`;
+  const content = pendingSpool.map((record) => JSON.stringify(record)).join('\n');
+  const fd = fs.openSync(temporary, 'w');
+  try {
+    if (content) fs.writeSync(fd, `${content}\n`);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(temporary, SPOOL_PATH);
+}
 
 let schedule = { enabled: false, hour: 8, minute: 0, grams: 30 };
 
@@ -129,7 +181,7 @@ app.get('/api/health', (req, res) => {
     uptime_s: Math.round(process.uptime()),
     devices: deviceSnapshot(),
     dashboards: dashboardSockets.size,
-    buffered_records: recentTelemetry.length,
+    buffered_records: pendingSpool.length,
     supabase: Boolean(SUPABASE_URL && SUPABASE_KEY),
   });
 });
@@ -228,6 +280,10 @@ function rememberPacket(key) {
   return true;
 }
 
+loadSpool();
+flushSpool();
+setInterval(flushSpool, 5000).unref();
+
 function onTelemetry(socket, message) {
   if (message.hello) {
     socket.deviceId = String(message.hello);
@@ -244,10 +300,10 @@ function onTelemetry(socket, message) {
   }
   socket.deviceId = deviceId;
 
-  // ACK ngay để ESP32 pop() Ring Buffer (kể cả gói trùng do timeout ACK).
-  socket.send(JSON.stringify({ ack: seq }));
-
-  if (!rememberPacket(`${deviceId}:${seq}`)) {
+  const packetKey = `${deviceId}:${seq}`;
+  if (seenPackets.has(packetKey)) {
+    // Gói retry đã được spool bền trước đó, có thể ACK an toàn.
+    socket.send(JSON.stringify({ ack: seq }));
     return; // đã lưu trước đó (retransmit / sync trùng)
   }
 
@@ -264,6 +320,11 @@ function onTelemetry(socket, message) {
     synced: Number(message.st) === 2,
     raw: message,
   };
+
+  // Không ACK nếu không thể lưu bền tại gateway; ESP32 sẽ gửi lại sau timeout.
+  if (!appendSpool(record)) return;
+  rememberPacket(packetKey);
+  socket.send(JSON.stringify({ ack: seq }));
 
   recentTelemetry.push(record);
   if (recentTelemetry.length > MAX_RECENT) {
@@ -283,12 +344,12 @@ function onTelemetry(socket, message) {
   }
 
   broadcast({ type: 'telemetry', data: record });
-  persistTelemetry(record);
+  flushSpool();
 }
 
 async function persistTelemetry(record) {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
-    return;
+    return false;
   }
   try {
     const response = await fetch(`${SUPABASE_URL}/rest/v1/telemetry_logs`, {
@@ -314,9 +375,31 @@ async function persistTelemetry(record) {
     });
     if (!response.ok) {
       console.error('[SUPABASE]', response.status, await response.text());
+      return false;
     }
+    return true;
   } catch (error) {
     console.error('[SUPABASE]', error.message);
+    return false;
+  }
+}
+
+async function flushSpool() {
+  if (flushingSpool || !SUPABASE_URL || !SUPABASE_KEY) return;
+  flushingSpool = true;
+  try {
+    while (pendingSpool.length > 0) {
+      const record = pendingSpool[0];
+      if (!(await persistTelemetry(record))) break;
+      pendingSpool.shift();
+      // Rewrite after each success: a crash can cause replay, while the DB key
+      // UNIQUE(device_id, seq_num) makes that replay idempotent.
+      compactSpool();
+    }
+  } catch (error) {
+    console.error('[SPOOL] Flush lỗi:', error.message);
+  } finally {
+    flushingSpool = false;
   }
 }
 

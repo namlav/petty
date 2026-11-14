@@ -1,13 +1,39 @@
 #include "ring_buffer.h"
 
+#include <Preferences.h>
+
 static const uint32_t FLASH_MAGIC = 0x51544550;  // "PETQ"
 
 bool RingBuffer::begin() {
-  _mounted = LittleFS.begin(true);  // format khi mount lỗi
+  // NVS marker phân biệt phân vùng LittleFS mới/chưa khởi tạo với filesystem
+  // đã từng hoạt động. Chỉ format ở lần đầu; lỗi mount về sau không xóa queue.
+  Preferences prefs;
+  const bool prefsReady = prefs.begin("petty-rb", false);
+  const bool fsWasInitialized =
+      prefsReady && prefs.getBool("fs_ready", false);
+
+  _mounted = LittleFS.begin(false);
   if (!_mounted) {
-    Serial.println("[RB] LittleFS mount that bai - chi dung RAM");
-    return false;
+    if (fsWasInitialized) {
+      Serial.println("[RB] LittleFS mount lỗi - giữ nguyên flash, chỉ RAM khả dụng");
+      if (prefsReady) prefs.end();
+      return false;
+    }
+    Serial.println("[RB] LittleFS chưa khởi tạo - format phân vùng lần đầu");
+    if (!LittleFS.format()) {
+      Serial.println("[RB] Format LittleFS thất bại");
+      if (prefsReady) prefs.end();
+      return false;
+    }
+    _mounted = LittleFS.begin(false);
+    if (!_mounted) {
+      Serial.println("[RB] LittleFS mount thất bại sau format");
+      if (prefsReady) prefs.end();
+      return false;
+    }
   }
+  if (prefsReady) prefs.putBool("fs_ready", true);
+  if (prefsReady) prefs.end();
 
   File file = LittleFS.open(FLASH_QUEUE_PATH, "r+");
   bool valid = false;
@@ -45,15 +71,15 @@ bool RingBuffer::begin() {
 
 // ---------------- Tầng RAM ----------------
 
-void RingBuffer::push(const TelemetryRecord& rec) {
+bool RingBuffer::push(const TelemetryRecord& rec) {
+  if (_count == RAM_BUFFER_CAPACITY) {
+    Serial.println("[RB] RAM queue đầy - từ chối gói mới để giữ gói chưa ACK");
+    return false;
+  }
   _ram[_head] = rec;
   _head = (uint16_t)((_head + 1) % RAM_BUFFER_CAPACITY);
-  if (_count == RAM_BUFFER_CAPACITY) {
-    // Đầy: ghi đè bản ghi cũ nhất, luôn giữ dữ liệu mới nhất.
-    _tail = (uint16_t)((_tail + 1) % RAM_BUFFER_CAPACITY);
-  } else {
-    _count++;
-  }
+  _count++;
+  return true;
 }
 
 bool RingBuffer::peek(TelemetryRecord& out) const {
@@ -80,25 +106,40 @@ void RingBuffer::_writeFlashHeader(File& file) {
   file.write((const uint8_t*)&header, sizeof(header));
 }
 
-void RingBuffer::pushFlash(const TelemetryRecord& rec) {
+bool RingBuffer::pushFlash(const TelemetryRecord& rec) {
   if (!_mounted) {
-    return;
+    return false;
+  }
+  if (_flashCount == FLASH_BUFFER_CAPACITY) {
+    Serial.println("[RB] Flash queue đầy - giữ nguyên dữ liệu chưa ACK");
+    return false;
   }
   File file = LittleFS.open(FLASH_QUEUE_PATH, "r+");
   if (!file) {
-    return;
+    return false;
   }
   const uint32_t offset =
       sizeof(FlashQueueHeader) + (uint32_t)_flashHead * sizeof(TelemetryRecord);
   file.seek(offset);
-  file.write((const uint8_t*)&rec, sizeof(rec));
-
-  _flashHead = (uint16_t)((_flashHead + 1) % FLASH_BUFFER_CAPACITY);
-  if (_flashCount < FLASH_BUFFER_CAPACITY) {
-    _flashCount++;  // đầy thì ghi đè bản ghi cũ nhất (circular overwrite)
+  if (file.write((const uint8_t*)&rec, sizeof(rec)) != sizeof(rec)) {
+    file.close();
+    return false;
   }
-  _writeFlashHeader(file);
+
+  const uint16_t oldHead = _flashHead;
+  const uint16_t oldCount = _flashCount;
+  _flashHead = (uint16_t)((_flashHead + 1) % FLASH_BUFFER_CAPACITY);
+  _flashCount++;
+  const FlashQueueHeader header{FLASH_MAGIC, _flashHead, _flashCount};
+  const bool headerWritten = file.seek(0) &&
+      file.write((const uint8_t*)&header, sizeof(header)) == sizeof(header);
   file.close();
+  if (!headerWritten) {
+    _flashHead = oldHead;
+    _flashCount = oldCount;
+    return false;
+  }
+  return true;
 }
 
 bool RingBuffer::peekFlash(TelemetryRecord& out) const {
@@ -124,13 +165,18 @@ void RingBuffer::popFlash() {
   if (_flashCount == 0 || !_mounted) {
     return;
   }
+  const uint16_t oldCount = _flashCount;
   _flashCount--;
   File file = LittleFS.open(FLASH_QUEUE_PATH, "r+");
   if (!file) {
+    _flashCount = oldCount;
     return;
   }
-  _writeFlashHeader(file);
+  const FlashQueueHeader header{FLASH_MAGIC, _flashHead, _flashCount};
+  const bool written = file.seek(0) &&
+      file.write((const uint8_t*)&header, sizeof(header)) == sizeof(header);
   file.close();
+  if (!written) _flashCount = oldCount;
 }
 
 void RingBuffer::clearFlash() {
@@ -149,8 +195,7 @@ void RingBuffer::clearFlash() {
 
 void RingBuffer::dumpRamToFlash() {
   TelemetryRecord rec;
-  while (peek(rec)) {
-    pushFlash(rec);
+  while (peek(rec) && pushFlash(rec)) {
     pop();
   }
 }
