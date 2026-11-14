@@ -1,0 +1,15 @@
+{
+    "folders": [
+        {
+            "name": "petty-root",
+            "path": "."
+        },
+        {
+            "name": "firmware (ESP32)",
+            "path": "firmware"
+        }
+    ],
+    "settings": {
+        "platformio-ide.autoOpenPlatformIOProject": true
+    }
+}
