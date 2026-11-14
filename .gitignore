@@ -33,9 +33,9 @@ Thumbs.db
 
 # ---- Local secrets ----
 petty-supabase-proj-pw.txt
+agent/
+.codegraph/
 
 # ---- Tooling caches ----
 .cache/
 Testing/
-agent/
-.codegraph/
