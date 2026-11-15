@@ -5,8 +5,16 @@
             "path": "."
         },
         {
-            "name": "firmware (ESP32)",
+            "name": "firmware (ESP32 - SV1/SV2)",
             "path": "firmware"
+        },
+        {
+            "name": "backend-ws-gateway (Node.js - SV2/SV3)",
+            "path": "backend-ws-gateway"
+        },
+        {
+            "name": "mobile-app (Flutter - SV3)",
+            "path": "mobile-app"
         }
     ],
     "settings": {

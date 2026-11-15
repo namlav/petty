@@ -3,7 +3,8 @@ version = 1
 firmware = ".pio/build/esp32dev/firmware.bin"
 elf = ".pio/build/esp32dev/firmware.elf"
 
-# Cho phép ESP32 trong Wokwi kết nối tới WebSocket Server trên máy tính (cổng 8080)
-[[net.forward]]
-from = "localhost:8080"
-to = "target:8080"
+# ESP32 chủ động kết nối ra Gateway trên máy host qua hostname DNS tích hợp
+# ws://host.wokwi.internal:8080/ws (không dùng [[net.forward]] cổng 8080 để tránh đụng cổng Gateway).
+# [[net.forward]]
+# from = "localhost:8080"
+# to = "target:8080"
