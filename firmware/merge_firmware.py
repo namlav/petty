@@ -3,14 +3,19 @@
 Import("env")
 
 from os.path import join
+import sys
 
 
 def merge_firmware(source, target, env):
     board = env.BoardConfig()
     build_dir = env.subst("$BUILD_DIR")
     merged = join(build_dir, "firmware.merged.bin")
-    esptool_dir = env.PioPlatform().get_package_dir("tool-esptool")
-    esptool = join(esptool_dir, "esptool.exe")
+    # PlatformIO's ESP32 platform ships esptool as a Python package.
+    platform = env.PioPlatform()
+    esptool_dir = platform.get_package_dir("tool-esptoolpy") or platform.get_package_dir(
+        "tool-esptool"
+    )
+    esptool_py = join(esptool_dir, "esptool.py")
 
     images = [
         (offset, env.subst(path))
@@ -19,7 +24,8 @@ def merge_firmware(source, target, env):
     images.append((env.subst("$ESP32_APP_OFFSET"), str(target[0])))
 
     command = [
-        '"{}"'.format(esptool),
+        '"{}"'.format(sys.executable),
+        '"{}"'.format(esptool_py),
         "--chip",
         board.get("build.mcu", "esp32"),
         "merge_bin",
