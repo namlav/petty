@@ -1,0 +1,135 @@
+rules_version = '2';
+
+// ============================================================
+// [SV3: T-SV3-01 / T-SV3-03] Firebase Cloud Firestore Security Rules (RBAC)
+// Vai trò: admin | owner | viewer | device
+//   admin  : toàn quyền hệ thống
+//   owner  : thiết bị mình sở hữu (owner_id == uid) + lịch ăn + lệnh điều khiển
+//   viewer : member của thiết bị (uid in member_ids), chỉ đọc & đánh dấu đã đọc alert
+//   device : chỉ ghi telemetry_logs của chính nó (qua Custom Token role='device')
+// ============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userRole() {
+      return isSignedIn()
+        ? (request.auth.token.role != null
+            ? request.auth.token.role
+            : (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+                ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+                : 'viewer'))
+        : '';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && userRole() == 'admin';
+    }
+
+    function deviceDoc(deviceId) {
+      return get(/databases/$(database)/documents/devices/$(deviceId));
+    }
+
+    function isDeviceOwner(deviceId) {
+      return isAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/devices/$(deviceId)) &&
+        deviceDoc(deviceId).data.owner_id == request.auth.uid
+      );
+    }
+
+    function canReadDevice(deviceId) {
+      return isDeviceOwner(deviceId) || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/devices/$(deviceId)) &&
+        deviceDoc(deviceId).data.member_ids != null &&
+        request.auth.uid in deviceDoc(deviceId).data.member_ids
+      );
+    }
+
+    // ---------- users/{userId} ----------
+    match /users/{userId} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+      allow create: if isAdmin() || (
+        isSignedIn() &&
+        request.auth.uid == userId &&
+        request.resource.data.role == 'viewer'
+      );
+      allow update, delete: if isAdmin();
+    }
+
+    // ---------- devices/{deviceId} ----------
+    match /devices/{deviceId} {
+      allow read: if canReadDevice(deviceId);
+      allow create: if isAdmin() || (isSignedIn() && request.resource.data.owner_id == request.auth.uid);
+      allow update, delete: if isDeviceOwner(deviceId);
+    }
+
+    // ---------- feeding_schedules/{scheduleId} ----------
+    match /feeding_schedules/{scheduleId} {
+      allow read: if canReadDevice(resource.data.device_id);
+      allow create: if isDeviceOwner(request.resource.data.device_id);
+      allow update: if isDeviceOwner(resource.data.device_id) &&
+                       isDeviceOwner(request.resource.data.device_id);
+      allow delete: if isDeviceOwner(resource.data.device_id);
+    }
+
+    // ---------- telemetry_logs/{logId} (append-only time-series) ----------
+    match /telemetry_logs/{logId} {
+      allow read: if canReadDevice(resource.data.device_id);
+      allow create: if isAdmin() || (
+        isSignedIn() &&
+        userRole() == 'device' &&
+        request.auth.token.device_id == request.resource.data.device_id
+      );
+      allow update, delete: if false;
+    }
+
+    // ---------- device_commands/{cmdId} ----------
+    match /device_commands/{cmdId} {
+      allow read: if canReadDevice(resource.data.device_id);
+      allow create: if isDeviceOwner(request.resource.data.device_id);
+      allow update: if isAdmin() || isDeviceOwner(resource.data.device_id);
+      allow delete: if isAdmin();
+    }
+
+    // ---------- alerts/{alertId} ----------
+    match /alerts/{alertId} {
+      allow read: if canReadDevice(resource.data.device_id);
+      allow update: if canReadDevice(resource.data.device_id) &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read_at']);
+      allow create, delete: if isAdmin();
+    }
+
+    // ---------- feeding_events/{eventId} ----------
+    match /feeding_events/{eventId} {
+      allow read: if canReadDevice(resource.data.device_id);
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------- stats_hourly/{bucketId} & stats_daily/{bucketId} ----------
+    match /stats_hourly/{bucketId} {
+      allow read: if canReadDevice(resource.data.device_id);
+      allow write: if isAdmin();
+    }
+
+    match /stats_daily/{bucketId} {
+      allow read: if canReadDevice(resource.data.device_id);
+      allow write: if isAdmin();
+    }
+
+    // ---------- fcm_tokens/{token} ----------
+    match /fcm_tokens/{token} {
+      allow read, delete: if isAdmin() || (isSignedIn() && resource.data.user_id == request.auth.uid);
+      allow create, update: if isAdmin() || (isSignedIn() && request.resource.data.user_id == request.auth.uid);
+    }
+
+    // ---------- device_credentials/{deviceId} (Admin SDK / Gateway only) ----------
+    match /device_credentials/{deviceId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

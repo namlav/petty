@@ -30,6 +30,7 @@
 #define TANK_HEIGHT_CM 30.0f
 #define TANK_FULL_DISTANCE_CM 4.0f
 #define LOW_FOOD_PERCENT 15
+#define LOW_FOOD_HYSTERESIS_PERCENT 25
 
 // ---------- Màn hình / nút bấm / cảnh báo ----------
 #define PIN_OLED_SDA 21
@@ -47,22 +48,42 @@
 #define FILTER_STABLE_SAMPLES 5
 #define FILTER_STABLE_THRESHOLD_G 1.0f
 
-// ---------- Ngưỡng cơ khí ----------
+// ---------- Ngưỡng cơ khí & NVS (SV1) ----------
 #define FEED_TARGET_GRAMS 30.0f   // khẩu phần mặc định
 #define BOWL_FULL_GRAMS 120.0f    // chống tràn
 #define SENSOR_INTERVAL_MS 200
 #define TELEMETRY_INTERVAL_MS 5000
+#define MAX_SCHEDULES 4
+#define NVS_NAMESPACE_SCHED "petty-sched"
+#define NVS_NAMESPACE_CAL "petty-cal"
 
 // ---------- Mạng & WebSocket (SV2) ----------
 // Wokwi ESP32 dùng WiFi ảo Wokwi-GUEST (không mật khẩu).
 #define WIFI_SSID "Wokwi-GUEST"
 #define WIFI_PASSWORD ""
-// Với Wokwi VS Code: "target" được ánh xạ bởi [[net.forward]] trong wokwi.toml.
-// Với phần cứng thật: đổi thành IP LAN của máy chạy backend-ws-gateway.
-#define WS_HOST "target"
+// Với Wokwi VS Code: "host.wokwi.internal" là hostname DNS có sẵn của Wokwi trỏ về localhost máy tính.
+// Với phần cứng thật / deploy Cloud: truyền -D WS_HOST=\"...\" trong platformio.ini hoặc sửa tại đây.
+#ifndef WS_HOST
+#define WS_HOST "host.wokwi.internal"
+#endif
+
+// Bật -D PETTY_TLS=1 khi kết nối Gateway HTTPS/WSS (port 443) trên Render/Koyeb.
+#ifndef PETTY_TLS
+#define PETTY_TLS 0
+#endif
+
+#ifndef WS_PORT
+#if PETTY_TLS
+#define WS_PORT 443
+#else
 #define WS_PORT 8080
+#endif
+#endif
+
 #define WS_PATH "/ws?role=device&token=dev-device-token"
 #define DEVICE_ID "esp01"
+#define DEVICE_TOKEN "dev-device-token"
+#define CMD_DEDUP_WINDOW 8
 
 #define WS_HEARTBEAT_INTERVAL_MS 10000
 #define WS_ACK_TIMEOUT_MS 3000

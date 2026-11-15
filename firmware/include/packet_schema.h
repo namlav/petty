@@ -52,28 +52,60 @@ inline size_t encodeTelemetryJson(const TelemetryRecord& r, char* out, size_t ou
   if (written < 0 || (size_t)written >= outSize) {
     return 0;
   }
-  if (buffered == 0) {
-    return (size_t)snprintf(out + written, outSize - written, "}");
+  const int tail = (buffered == 0)
+                       ? snprintf(out + written, outSize - written, "}")
+                       : snprintf(out + written, outSize - written, ",\"q\":%u}",
+                                  (unsigned)buffered);
+  if (tail < 0 || (size_t)(written + tail) >= outSize) {
+    return 0;
   }
-  return (size_t)snprintf(out + written, outSize - written, ",\"q\":%u}",
-                          (unsigned)buffered);
+  return (size_t)(written + tail);
 }
 
 // ============================================================
-// Lệnh từ Server -> thiết bị ({"cmd":"FEED","g":30}, ...)
+// Lệnh từ Server -> thiết bị ({"cmd":"FEED","g":30,"cid":123}, ...)
 // ============================================================
+enum FeedSource : uint8_t {
+  FEED_SRC_NONE = 0,
+  FEED_SRC_MANUAL = 1,
+  FEED_SRC_SCHEDULE = 2,
+  FEED_SRC_BUTTON = 3,
+};
+
 enum CommandType : uint8_t {
   CMD_NONE = 0,
   CMD_FEED,
   CMD_STOP,
   CMD_SET_SCHEDULE,
   CMD_CLEAR_ERROR,
+  CMD_SET_SCHEDULES,
+};
+
+struct ScheduleSlot {
+  uint8_t hour = 0;
+  uint8_t minute = 0;
+  float grams = FEED_TARGET_GRAMS;
+  bool enabled = false;
 };
 
 struct Command {
   CommandType type = CMD_NONE;
+  uint32_t cid = 0;  // ID lệnh (device_commands.id), 0 nếu không yêu cầu cack
   float grams = FEED_TARGET_GRAMS;
   uint8_t hour = 0;
   uint8_t minute = 0;
   bool enabled = false;
+  uint8_t scheduleCount = 0;
+  ScheduleSlot schedules[MAX_SCHEDULES];
 };
+
+// Xác nhận thực thi lệnh từ thiết bị -> Gateway: {"cack":125,"ok":true}
+inline size_t encodeCommandAckJson(uint32_t cid, bool ok, char* out, size_t outSize) {
+  const int written =
+      snprintf(out, outSize, "{\"cack\":%lu,\"ok\":%s}",
+               (unsigned long)cid, ok ? "true" : "false");
+  if (written < 0 || (size_t)written >= outSize) {
+    return 0;
+  }
+  return (size_t)written;
+}
