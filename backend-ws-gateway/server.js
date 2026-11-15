@@ -291,27 +291,30 @@ async function persistTelemetry(record) {
     return;
   }
   try {
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/telemetry_logs`, {
-      method: 'POST',
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        // UNIQUE(device_id, seq_num) chống ghi trùng khi ESP32 sync lại.
-        Prefer: 'resolution=ignore-duplicates,return=minimal',
-      },
-      body: JSON.stringify({
-        device_id: record.device_id,
-        seq_num: record.seq_num,
-        recorded_at: record.recorded_at,
-        weight_g: record.weight_g,
-        food_level: record.food_level,
-        status: record.status,
-        error_code: record.error_code,
-        synced: record.synced,
-        raw: record.raw,
-      }),
-    });
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/telemetry_logs?on_conflict=device_id,seq_num`,
+      {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          // UNIQUE(device_id, seq_num) chống ghi trùng khi ESP32 sync lại.
+          Prefer: 'resolution=ignore-duplicates,return=minimal',
+        },
+        body: JSON.stringify({
+          device_id: record.device_id,
+          seq_num: record.seq_num,
+          recorded_at: record.recorded_at,
+          weight_g: record.weight_g,
+          food_level: record.food_level,
+          status: record.status,
+          error_code: record.error_code,
+          synced: record.synced,
+          raw: record.raw,
+        }),
+      }
+    );
     if (!response.ok) {
       console.error('[SUPABASE]', response.status, await response.text());
     }
