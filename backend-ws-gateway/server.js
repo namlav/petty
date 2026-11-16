@@ -223,7 +223,7 @@ app.get('/api/devices', auth(['admin', 'owner', 'viewer']), async (req, res) => 
       bowl_weight_g: latest?.weight_g ?? 0,
       food_level: latest?.food_level ?? 0,
     };
-  }).filter((device) => req.user?.role === 'admin' && !firestoreDb);
+  }).filter(() => req.user?.role === 'admin');
   return res.json({ data });
 });
 
@@ -626,6 +626,15 @@ function broadcastDeviceStatus() {
   }
 }
 
+function clearSeenPacketsForDevice(deviceId) {
+  const prefix = `${deviceId}:`;
+  for (const key of seenPackets) {
+    if (key.startsWith(prefix)) {
+      seenPackets.delete(key);
+    }
+  }
+}
+
 function rememberPacket(key) {
   if (seenPackets.has(key)) {
     return false;
@@ -645,6 +654,7 @@ async function onTelemetry(socket, message) {
       return;
     }
     socket.deviceId = helloDeviceId;
+    clearSeenPacketsForDevice(socket.deviceId);
     lastSeenMsByDevice.set(socket.deviceId, Date.now());
     rememberDevice(socket.deviceId, { online: true, last_seen: new Date().toISOString() });
     console.log(`[WS] Thiet bi ${socket.deviceId} dang ky`);
@@ -695,6 +705,10 @@ async function onTelemetry(socket, message) {
   lastSeenMsByDevice.set(deviceId, Date.now());
   rememberDevice(deviceId, { online: true, last_seen: new Date().toISOString() });
 
+  if (Number(message.st) !== 2 && seq === 1 && socket.lastSeq !== 1) {
+    clearSeenPacketsForDevice(deviceId);
+  }
+
   const packetKey = `${deviceId}:${seq}`;
   if (seenPackets.has(packetKey)) {
     socket.send(JSON.stringify({ ack: seq }));
@@ -738,6 +752,7 @@ async function onTelemetry(socket, message) {
     }
   }
   rememberPacket(packetKey);
+  socket.lastSeq = seq;
   socket.send(JSON.stringify({ ack: seq }));
   recentTelemetry.push(record);
   if (recentTelemetry.length > MAX_RECENT) recentTelemetry.shift();
@@ -783,13 +798,13 @@ async function persistTelemetry(record) {
     };
     await firestoreDb.runTransaction(async (transaction) => {
       const existing = await transaction.get(logRef);
-      if (existing.exists) return;
+      if (existing.exists && record.synced) return;
 
       const deviceSnapshot = await transaction.get(deviceRef);
       const previousWeight = deviceSnapshot.exists
         ? Number(deviceSnapshot.data()?.bowl_weight_g)
         : NaN;
-      transaction.create(logRef, logData);
+      transaction.set(logRef, logData);
       transaction.set(
         deviceRef,
         {

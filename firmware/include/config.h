@@ -65,11 +65,7 @@
 // Với Wokwi VS Code: "host.wokwi.internal" là hostname DNS có sẵn của Wokwi trỏ về localhost máy tính.
 // Với phần cứng thật / deploy Cloud: truyền -D WS_HOST=\"...\" trong platformio.ini hoặc sửa tại đây.
 #ifndef WS_HOST
-#ifdef PETTY_USE_WOKWI_PRIVATE_GW
 #define WS_HOST "host.wokwi.internal"
-#else
-#define WS_HOST "target"
-#endif
 #endif
 
 // Bật -D PETTY_TLS=1 khi kết nối Gateway HTTPS/WSS (port 443) trên Render/Koyeb.

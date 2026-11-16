@@ -23,7 +23,7 @@ void WsManager::begin(RingBuffer* ringBuffer) {
 
   char deviceHeaders[128];
   snprintf(deviceHeaders, sizeof(deviceHeaders),
-           "Authorization: Bearer %s\r\nX-Device-ID: %s\r\n",
+           "Authorization: Bearer %s\r\nX-Device-ID: %s",
            DEVICE_TOKEN, DEVICE_ID);
   _ws.setExtraHeaders(deviceHeaders);
 #if PETTY_TLS

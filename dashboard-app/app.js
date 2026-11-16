@@ -156,7 +156,10 @@ function applyRecord(record) {
   if (!record) {
     return;
   }
-  const key = `${record.device_id}:${record.seq_num}`;
+  if (Number(record.seq_num) === 1 && !record.synced) {
+    state.seen.clear();
+  }
+  const key = `${record.device_id}:${record.seq_num}:${record.recorded_at || ''}`;
   if (state.seen.has(key)) {
     return;
   }

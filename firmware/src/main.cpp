@@ -94,6 +94,9 @@ TelemetryRecord buildRecord(uint8_t status, uint8_t error) {
   TelemetryRecord rec{};
   rec.version = PROTOCOL_VERSION;
   rec.seq = ++g_sequence;
+  if (schedulePrefsReady) {
+    schedulePrefs.putUInt("seq", g_sequence);
+  }
   rec.ts = nowTimestamp();
   rec.weight = g_weight;
   rec.level = g_level;
@@ -199,6 +202,7 @@ void loadSchedulesFromNvs() {
     Serial.println("[SCHEDULE] Khong mo duoc NVS; dung lich RAM");
     return;
   }
+  g_sequence = schedulePrefs.getUInt("seq", 0);
   scheduleCount = min(schedulePrefs.getUChar("count", 0), (uint8_t)MAX_SCHEDULES);
   for (uint8_t i = 0; i < scheduleCount; ++i) {
     char key[8];
@@ -287,8 +291,11 @@ void handleCommands() {
         break;
       case CMD_SET_SCHEDULE:
         scheduleCount = 1;
-        schedules[0] = {command.enabled, command.hour, command.minute,
-                        command.grams, -1};
+        schedules[0].enabled = command.enabled;
+        schedules[0].hour = command.hour;
+        schedules[0].minute = command.minute;
+        schedules[0].grams = command.grams;
+        schedules[0].lastFiredSlot = -1;
         saveSchedulesToNvs();
         Serial.printf("[SCHEDULE] %s %02u:%02u - %.1f g\n",
                       schedules[0].enabled ? "ON" : "OFF",
@@ -298,8 +305,11 @@ void handleCommands() {
       case CMD_SET_SCHEDULES:
         scheduleCount = min(command.scheduleCount, (uint8_t)MAX_SCHEDULES);
         for (uint8_t i = 0; i < scheduleCount; i++) {
-          schedules[i] = {command.schedules[i].enabled, command.schedules[i].hour,
-                          command.schedules[i].minute, command.schedules[i].grams, -1};
+          schedules[i].enabled = command.schedules[i].enabled;
+          schedules[i].hour = command.schedules[i].hour;
+          schedules[i].minute = command.schedules[i].minute;
+          schedules[i].grams = command.schedules[i].grams;
+          schedules[i].lastFiredSlot = -1;
         }
         saveSchedulesToNvs();
         Serial.printf("[SCHEDULE] Dong bo %u lich\n", (unsigned)scheduleCount);
