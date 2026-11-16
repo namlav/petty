@@ -56,6 +56,7 @@
 #define MAX_SCHEDULES 4
 #define NVS_NAMESPACE_SCHED "petty-sched"
 #define NVS_NAMESPACE_CAL "petty-cal"
+#define NVS_NAMESPACE_CMD "petty-cmd"
 
 // ---------- Mạng & WebSocket (SV2) ----------
 // Wokwi ESP32 dùng WiFi ảo Wokwi-GUEST (không mật khẩu).
@@ -64,12 +65,36 @@
 // Với Wokwi VS Code: "host.wokwi.internal" là hostname DNS có sẵn của Wokwi trỏ về localhost máy tính.
 // Với phần cứng thật / deploy Cloud: truyền -D WS_HOST=\"...\" trong platformio.ini hoặc sửa tại đây.
 #ifndef WS_HOST
+#ifdef PETTY_USE_WOKWI_PRIVATE_GW
 #define WS_HOST "host.wokwi.internal"
+#else
+#define WS_HOST "target"
+#endif
 #endif
 
 // Bật -D PETTY_TLS=1 khi kết nối Gateway HTTPS/WSS (port 443) trên Render/Koyeb.
 #ifndef PETTY_TLS
 #define PETTY_TLS 0
+#endif
+
+#ifndef PETTY_PRODUCTION
+#define PETTY_PRODUCTION 0
+#endif
+
+#if PETTY_PRODUCTION && !PETTY_TLS
+#error "Production firmware requires TLS (PETTY_TLS=1)"
+#endif
+
+#if PETTY_PRODUCTION && !defined(DEVICE_TOKEN)
+#error "Production firmware requires a per-device DEVICE_TOKEN"
+#endif
+
+#if PETTY_PRODUCTION && (!defined(WS_HOST) || !defined(PETTY_ROOT_CA))
+#error "Production firmware requires WS_HOST and PETTY_ROOT_CA"
+#endif
+
+#if PETTY_TLS && !defined(PETTY_ROOT_CA)
+#error "PETTY_TLS requires PETTY_ROOT_CA so the Gateway certificate is verified"
 #endif
 
 #ifndef WS_PORT
@@ -80,9 +105,15 @@
 #endif
 #endif
 
-#define WS_PATH "/ws?role=device&token=dev-device-token"
+#define WS_PATH "/ws?role=device"
 #define DEVICE_ID "esp01"
+#ifndef DEVICE_TOKEN
+#if PETTY_PRODUCTION
+#error "Set DEVICE_TOKEN for production firmware"
+#else
 #define DEVICE_TOKEN "dev-device-token"
+#endif
+#endif
 #define CMD_DEDUP_WINDOW 8
 
 #define WS_HEARTBEAT_INTERVAL_MS 10000

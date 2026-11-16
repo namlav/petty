@@ -68,6 +68,8 @@ flowchart LR
 * **Luồng dữ liệu đi lên:** Cảm biến (HX711, HC-SR04, LIMIT_SW) $\rightarrow$ ESP32 lọc số & đóng gói $\rightarrow$ WebSocket Gateway (lưu đệm & trả `ACK`) $\rightarrow$ Cloud Firestore `telemetry_logs` + cộng dồn `stats_hourly`/`stats_daily` + Alert Engine $\rightarrow$ Mobile App/Web (realtime WS) & FCM (cảnh báo).
 * **Luồng lệnh đi xuống:** Mobile App/Web $\rightarrow$ Gateway REST (`POST /api/feed`, `/api/stop`, `PUT /api/schedules`, kiểm tra JWT/RBAC) $\rightarrow$ Firestore `device_commands` $\rightarrow$ WebSocket Gateway $\rightarrow$ ESP32 (thực thi & trả `CACK`) $\rightarrow$ A4988 + Stepper.
 
+Telemetry thêm `src` để giữ nguồn cho ăn (`0` không rõ, `1` manual, `2` schedule, `3` button). Khi gói offline được đồng bộ với `st=2`, trường `os` giữ trạng thái gốc để Gateway vẫn nhận diện được chuyển trạng thái cho ăn.
+
 ---
 
 ## 3. Bảng liệt kê linh kiện, thông số, giao thức & dịch vụ Cloud
@@ -107,9 +109,9 @@ flowchart LR
 
 ## 5. Bảo mật API End-to-End & Giao thức
 
-* **Mã hóa kênh truyền:** Môi trường deploy Cloud (Render / Koyeb) sử dụng bắt buộc **HTTPS / WSS (TLS 1.2+)**; ESP32 bật cờ `-D PETTY_TLS=1` dùng `WebSocketsClient::beginSSL`. Kết nối từ Gateway tới Firebase sử dụng HTTPS/gRPC mặc định của `firebase-admin`.
+* **Mã hóa kênh truyền:** Môi trường deploy Cloud (Render / Koyeb) sử dụng bắt buộc **HTTPS / WSS (TLS 1.2+)**; PlatformIO `production` yêu cầu hostname, token thiết bị và CA PEM qua environment, sau đó ESP32 dùng `WebSocketsClient::beginSslWithCA` để xác minh chứng thư. Kết nối từ Gateway tới Firebase sử dụng HTTPS/gRPC mặc định của `firebase-admin`.
 * **Xác thực người dùng:** Firebase Authentication cấp ID Token JWT (email/password qua Firebase Auth REST/SDK); App/Web đính kèm header `Authorization: Bearer <token>` cho mọi request REST và kết nối WS. Gateway xác minh qua `firebaseAuth.verifyIdToken` (hoặc HS256 `JWT_SECRET` fallback) và đọc vai trò từ `users/{uid}` trong `backend-ws-gateway/auth.js`.
-* **Xác thực thiết bị:** ESP32 gửi token thiết bị qua header `Authorization: Bearer <token>` (hoặc query param dự phòng ở dev), đối chiếu với `DEVICE_TOKEN` hoặc collection `device_credentials` (chỉ Admin SDK / admin được phép truy cập qua `firestore.rules`).
+* **Xác thực thiết bị:** ESP32 gửi token qua header `Authorization: Bearer <token>` và ID qua `X-Device-ID`; URL WebSocket không chứa token. Development cho phép token mặc định và query param dự phòng; production bắt buộc cả hai header và chỉ chấp nhận SHA-256 của token khớp `device_credentials/{device_id}.token_hash` trong Firestore. Wokwi dùng Private IoT Gateway và `host.wokwi.internal:8080` để truy cập Gateway local.
 * **Phân quyền RBAC (`admin` / `owner` / `viewer`):**
   - `admin`: toàn quyền quản trị hệ thống.
   - `owner` (Chủ nuôi): điều khiển cho ăn (`POST /api/feed`), dừng (`POST /api/stop`), chỉnh sửa lịch (`PUT /api/schedules`), xem thống kê & cảnh báo của thiết bị mình sở hữu (`devices.owner_id == uid`).

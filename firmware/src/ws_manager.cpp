@@ -6,12 +6,33 @@
 void WsManager::begin(RingBuffer* ringBuffer) {
   _rb = ringBuffer;
 
+  _cmdPrefs.begin(NVS_NAMESPACE_CMD, false);
+  _recentCidCount = _cmdPrefs.getUChar("count", 0);
+  if (_recentCidCount > CMD_DEDUP_WINDOW) _recentCidCount = CMD_DEDUP_WINDOW;
+  _recentCidNext = _cmdPrefs.getUChar("next", 0) % CMD_DEDUP_WINDOW;
+  for (uint8_t i = 0; i < CMD_DEDUP_WINDOW; i++) {
+    char key[8];
+    snprintf(key, sizeof(key), "cid%u", (unsigned)i);
+    _recentCids[i] = _cmdPrefs.getUInt(key, 0);
+  }
+
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(false);  // tự quản lý backoff
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.printf("[WS] Dang ket noi WiFi \"%s\"\n", WIFI_SSID);
 
+  char deviceHeaders[128];
+  snprintf(deviceHeaders, sizeof(deviceHeaders),
+           "Authorization: Bearer %s\r\nX-Device-ID: %s\r\n",
+           DEVICE_TOKEN, DEVICE_ID);
+  _ws.setExtraHeaders(deviceHeaders);
+#if PETTY_TLS
+  // beginSSL's fourth parameter is a leaf-certificate fingerprint in this
+  // library; use the CA-specific API so the PEM is parsed as a trust anchor.
+  _ws.beginSslWithCA(WS_HOST, WS_PORT, WS_PATH, PETTY_ROOT_CA);
+#else
   _ws.begin(WS_HOST, WS_PORT, WS_PATH);
+#endif
   _ws.setReconnectInterval(BACKOFF_BASE_MS);
   _ws.enableHeartbeat(WS_HEARTBEAT_INTERVAL_MS, 3000, 2);
   _ws.onEvent([this](WStype_t type, uint8_t* payload, size_t length) {
@@ -90,16 +111,47 @@ bool WsManager::popCommand(Command& out) {
   return true;
 }
 
-void WsManager::_queueCommand(const Command& cmd) {
+bool WsManager::_queueCommand(const Command& cmd) {
+  if (cmd.cid != 0 && _hasRecentCid(cmd.cid)) {
+    ackCommand(cmd.cid, true);
+    return true;
+  }
   if (_commandCount == COMMAND_QUEUE_SIZE) {
-    // Hàng đợi đầy: bỏ lệnh cũ nhất, giữ lệnh mới.
-    _commandHead = (uint8_t)((_commandHead + 1) % COMMAND_QUEUE_SIZE);
-    _commandCount--;
+    ackCommand(cmd.cid, false);
+    return false;
   }
   const uint8_t slot =
       (uint8_t)((_commandHead + _commandCount) % COMMAND_QUEUE_SIZE);
   _commands[slot] = cmd;
   _commandCount++;
+  return true;
+}
+
+bool WsManager::_hasRecentCid(uint32_t cid) const {
+  for (uint8_t i = 0; i < _recentCidCount; i++) {
+    if (_recentCids[i] == cid) return true;
+  }
+  return false;
+}
+
+void WsManager::_rememberCid(uint32_t cid) {
+  _recentCids[_recentCidNext] = cid;
+  char key[8];
+  snprintf(key, sizeof(key), "cid%u", (unsigned)_recentCidNext);
+  _cmdPrefs.putUInt(key, cid);
+  _recentCidNext = (uint8_t)((_recentCidNext + 1) % CMD_DEDUP_WINDOW);
+  if (_recentCidCount < CMD_DEDUP_WINDOW) _recentCidCount++;
+  _cmdPrefs.putUChar("count", _recentCidCount);
+  _cmdPrefs.putUChar("next", _recentCidNext);
+}
+
+void WsManager::ackCommand(uint32_t cid, bool ok) {
+  if (cid == 0 || !_connected) return;
+  if (ok && !_hasRecentCid(cid)) _rememberCid(cid);
+  char payload[48];
+  if (encodeCommandAckJson(cid, ok, payload, sizeof(payload)) > 0) {
+    _ws.sendTXT(payload);
+  }
 }
 
 void WsManager::_sendRecord(const TelemetryRecord& rec, bool offlineSynced) {
@@ -110,7 +162,7 @@ void WsManager::_sendRecord(const TelemetryRecord& rec, bool offlineSynced) {
   Serial.printf("[WS] %s s=%lu t=%lu w=%.1f l=%u st=%u e=%u\n",
                 offlineSynced ? "SYNC" : "TX", (unsigned long)rec.seq,
                 (unsigned long)rec.ts, (double)rec.weight, (unsigned)rec.level,
-                (unsigned)(offlineSynced ? ST_OFFLINE_SYNCED : rec.status),
+                (unsigned)(offlineSynced ? ST_OFFLINE_SYNCED : (rec.status & 0x03)),
                 (unsigned)rec.error);
 }
 
@@ -244,12 +296,16 @@ void WsManager::_handleText(const char* text) {
     return;
   }
 
+  if (!doc["cack"].isNull()) return;  // ACK hướng thiết bị, bỏ qua
+
   const char* cmd = doc["cmd"];
   if (cmd == nullptr) {
     return;
   }
 
   Command command;
+  command.cid = doc["cid"] | (uint32_t)0;
+  command.expired = doc["expired"] | false;
   if (strcmp(cmd, "FEED") == 0) {
     command.type = CMD_FEED;
     command.grams = doc["g"] | FEED_TARGET_GRAMS;
@@ -261,6 +317,17 @@ void WsManager::_handleText(const char* text) {
     command.minute = doc["m"] | 0;
     command.grams = doc["g"] | FEED_TARGET_GRAMS;
     command.enabled = doc["on"] | true;
+  } else if (strcmp(cmd, "SET_SCHEDULES") == 0) {
+    command.type = CMD_SET_SCHEDULES;
+    JsonArrayConst items = doc["items"].as<JsonArrayConst>();
+    command.scheduleCount = (uint8_t)min((size_t)MAX_SCHEDULES, items.size());
+    for (uint8_t i = 0; i < command.scheduleCount; i++) {
+      JsonObjectConst item = items[i];
+      command.schedules[i].hour = item["h"] | 0;
+      command.schedules[i].minute = item["m"] | 0;
+      command.schedules[i].grams = item["g"] | FEED_TARGET_GRAMS;
+      command.schedules[i].enabled = item["on"] | true;
+    }
   } else if (strcmp(cmd, "CLEAR_ERROR") == 0) {
     command.type = CMD_CLEAR_ERROR;
   } else {
@@ -268,7 +335,10 @@ void WsManager::_handleText(const char* text) {
     return;
   }
 
-  _queueCommand(command);
+  if (!_queueCommand(command)) {
+    Serial.printf("[WS] Hang doi day, tu choi lenh: %s\n", cmd);
+    return;
+  }
   Serial.printf("[WS] Nhan lenh: %s\n", cmd);
 }
 

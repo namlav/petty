@@ -14,6 +14,8 @@ const state = {
   token: localStorage.getItem('petty.token') || '',
   reconnectDelay: 1000,
   lastTelemetryAt: 0,
+  deviceId: null,
+  gatewayDeviceOnline: null,
   lastWeight: null,
   seen: new Set(),
   consumption: new Array(24).fill(0),
@@ -100,11 +102,15 @@ function handleMessage(message) {
     case 'snapshot': {
       const data = message.data || {};
       (data.recent || []).forEach(applyRecord);
+      applyDeviceStatus(data.devices || []);
       if (data.schedule) {
         renderSchedule(data.schedule);
       }
       break;
     }
+    case 'status':
+      applyDeviceStatus(message.devices || []);
+      break;
     case 'telemetry':
       applyRecord(message.data);
       break;
@@ -114,9 +120,33 @@ function handleMessage(message) {
     case 'error':
       notify(`Lỗi: ${message.error}`);
       break;
+    case 'alert':
+      notify(message.data?.message || 'Có cảnh báo mới');
+      break;
     default:
       break;
   }
+}
+
+function applyDeviceStatus(devices) {
+  if (!state.deviceId) {
+    state.deviceId = devices.find((device) => device.id === 'esp01')?.id || devices[0]?.id || 'esp01';
+  }
+  const device = devices.find((item) => item.id === state.deviceId);
+  if (!device) {
+    state.gatewayDeviceOnline = false;
+    setDevicePresence(false, null);
+    return;
+  }
+  state.gatewayDeviceOnline = Boolean(device.online);
+  setDevicePresence(state.gatewayDeviceOnline, device.last_seen);
+}
+
+function setDevicePresence(online, lastSeen) {
+  const element = $('deviceState');
+  element.textContent = online ? 'ONLINE' : 'OFFLINE';
+  element.className = `pill ${online ? 'online' : 'offline'}`;
+  if (lastSeen) $('lastSeen').textContent = `Cập nhật ${formatTime(lastSeen)}`;
 }
 
 // ------------------------------------------------------------
@@ -157,6 +187,8 @@ function applyRecord(record) {
 }
 
 function updateDeviceState(record) {
+  state.deviceId = record.device_id || state.deviceId;
+  state.gatewayDeviceOnline = true;
   let label = 'ONLINE';
   let cls = 'online';
 
@@ -177,6 +209,10 @@ function updateDeviceState(record) {
 }
 
 function checkStale() {
+  if (state.gatewayDeviceOnline === false) {
+    setDevicePresence(false, null);
+    return;
+  }
   if (!state.lastTelemetryAt) {
     return;
   }

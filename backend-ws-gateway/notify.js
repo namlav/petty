@@ -16,29 +16,25 @@ function createNotifier({ firestoreDb = null, messaging = null } = {}) {
       return [];
     }
     try {
-      // TODO(T-SV3-04): Đọc devices/{deviceId} để chỉ gửi tới owner_id + member_ids.
       const deviceSnap = await firestoreDb.collection('devices').doc(deviceId).get();
-      let allowedUserIds = null;
-      if (deviceSnap.exists) {
-        const d = deviceSnap.data() || {};
-        const ids = [d.owner_id, ...(Array.isArray(d.member_ids) ? d.member_ids : [])].filter(
-          Boolean
-        );
-        if (ids.length > 0) {
-          allowedUserIds = new Set(ids);
-        }
-      }
+      if (!deviceSnap.exists) return [];
+      const device = deviceSnap.data() || {};
+      const userIds = [...new Set([
+        device.owner_id,
+        ...(Array.isArray(device.member_ids) ? device.member_ids : []),
+      ].filter(Boolean))];
+      if (!userIds.length) return [];
 
-      const snap = await firestoreDb.collection('fcm_tokens').get();
-      const tokens = [];
-      snap.forEach((doc) => {
-        const data = doc.data() || {};
-        if (!data.token) return;
-        if (!allowedUserIds || allowedUserIds.has(data.user_id)) {
-          tokens.push(data.token);
-        }
-      });
-      return tokens;
+      const tokenSnaps = await Promise.all(
+        Array.from({ length: Math.ceil(userIds.length / 30) }, (_, index) =>
+          firestoreDb.collection('fcm_tokens')
+            .where('user_id', 'in', userIds.slice(index * 30, index * 30 + 30))
+            .get()
+        )
+      );
+      return tokenSnaps.flatMap((snap) => snap.docs
+        .map((doc) => doc.data()?.token)
+        .filter(Boolean));
     } catch (error) {
       console.error('[FCM] Lỗi đọc fcm_tokens từ Firestore:', error.message);
       return [];
