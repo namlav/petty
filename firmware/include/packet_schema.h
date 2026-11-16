@@ -25,6 +25,13 @@ enum PacketError : uint8_t {
   ERR_SENSOR_FAULT = 3,
 };
 
+enum FeedSource : uint8_t {
+  FEED_SRC_NONE = 0,
+  FEED_SRC_MANUAL = 1,
+  FEED_SRC_SCHEDULE = 2,
+  FEED_SRC_BUTTON = 3,
+};
+
 struct __attribute__((packed)) TelemetryRecord {
   uint8_t version;   // v
   uint32_t seq;      // s
@@ -42,13 +49,15 @@ static_assert(sizeof(TelemetryRecord) == 16, "TelemetryRecord phai dung 16 bytes
 inline size_t encodeTelemetryJson(const TelemetryRecord& r, char* out, size_t outSize,
                                   bool offlineSynced = false,
                                   uint16_t buffered = 0) {
-  const uint8_t st = offlineSynced ? (uint8_t)ST_OFFLINE_SYNCED : r.status;
+  const uint8_t st = offlineSynced ? (uint8_t)ST_OFFLINE_SYNCED : (r.status & 0x03);
+  const uint8_t src = (r.status >> 2) & 0x03;
   const int written = snprintf(out, outSize,
                                "{\"v\":%u,\"id\":\"%s\",\"s\":%lu,\"t\":%lu,\"w\":%.1f,"
-                               "\"l\":%u,\"st\":%u,\"e\":%u",
+                               "\"l\":%u,\"st\":%u,\"e\":%u,\"src\":%u,\"os\":%u",
                                (unsigned)r.version, DEVICE_ID, (unsigned long)r.seq,
                                (unsigned long)r.ts, (double)r.weight,
-                               (unsigned)r.level, (unsigned)st, (unsigned)r.error);
+                               (unsigned)r.level, (unsigned)st, (unsigned)r.error,
+                               (unsigned)src, (unsigned)(r.status & 0x03));
   if (written < 0 || (size_t)written >= outSize) {
     return 0;
   }
@@ -65,13 +74,6 @@ inline size_t encodeTelemetryJson(const TelemetryRecord& r, char* out, size_t ou
 // ============================================================
 // Lệnh từ Server -> thiết bị ({"cmd":"FEED","g":30,"cid":123}, ...)
 // ============================================================
-enum FeedSource : uint8_t {
-  FEED_SRC_NONE = 0,
-  FEED_SRC_MANUAL = 1,
-  FEED_SRC_SCHEDULE = 2,
-  FEED_SRC_BUTTON = 3,
-};
-
 enum CommandType : uint8_t {
   CMD_NONE = 0,
   CMD_FEED,
@@ -91,6 +93,7 @@ struct ScheduleSlot {
 struct Command {
   CommandType type = CMD_NONE;
   uint32_t cid = 0;  // ID lệnh (device_commands.id), 0 nếu không yêu cầu cack
+  bool expired = false;
   float grams = FEED_TARGET_GRAMS;
   uint8_t hour = 0;
   uint8_t minute = 0;

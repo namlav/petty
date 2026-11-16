@@ -2,6 +2,7 @@
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <Preferences.h>
 #include <Wire.h>
 #include <time.h>
 
@@ -21,6 +22,8 @@ SensorFilter loadCell;
 MotorControl motor;
 RingBuffer ringBuffer;
 WsManager wsManager;
+Preferences schedulePrefs;
+bool schedulePrefsReady = false;
 
 struct FeedingSchedule {
   bool enabled = false;
@@ -28,11 +31,13 @@ struct FeedingSchedule {
   uint8_t minute = 0;
   float grams = FEED_TARGET_GRAMS;
   int32_t lastFiredSlot = -1;
-} schedule;
+} schedules[MAX_SCHEDULES];
+uint8_t scheduleCount = 0;
 
 float g_weight = 0;
 uint8_t g_level = 0;
 uint8_t g_error = ERR_NONE;
+FeedSource g_feedSource = FEED_SRC_NONE;
 uint32_t g_sequence = 0;
 bool g_feeding = false;
 float g_targetWeight = 0;
@@ -89,10 +94,14 @@ TelemetryRecord buildRecord(uint8_t status, uint8_t error) {
   TelemetryRecord rec{};
   rec.version = PROTOCOL_VERSION;
   rec.seq = ++g_sequence;
+  if (schedulePrefsReady) {
+    schedulePrefs.putUInt("seq", g_sequence);
+  }
   rec.ts = nowTimestamp();
   rec.weight = g_weight;
   rec.level = g_level;
-  rec.status = status;
+  // Hai bit cao mang FeedSource, vẫn giữ TelemetryRecord đúng 16 byte.
+  rec.status = (status & 0x03) | ((uint8_t)g_feedSource << 2);
   rec.error = error;
   return rec;
 }
@@ -109,7 +118,16 @@ void publishEvent(uint8_t status, uint8_t error) {
 
 // ---------------- Chu trình cho ăn ----------------
 
-void startFeeding(float grams, const char* source) {
+const char* feedSourceName(FeedSource source) {
+  switch (source) {
+    case FEED_SRC_MANUAL: return "manual";
+    case FEED_SRC_SCHEDULE: return "schedule";
+    case FEED_SRC_BUTTON: return "button";
+    default: return "unknown";
+  }
+}
+
+void startFeeding(float grams, FeedSource source) {
   if (g_feeding) {
     Serial.println("[FEED] Dang cho an, bo qua yeu cau");
     return;
@@ -131,11 +149,12 @@ void startFeeding(float grams, const char* source) {
     motor.clearJam();
   }
   g_error = ERR_NONE;
+  g_feedSource = source;
   g_feeding = true;
   g_targetWeight = g_weight + grams;
   motor.startFeed();
   beepFeed();
-  Serial.printf("[FEED] Bat dau (%s) muc tieu %.1f g\n", source,
+  Serial.printf("[FEED] Bat dau (%s) muc tieu %.1f g\n", feedSourceName(source),
                 (double)g_targetWeight);
   publishEvent(ST_FEEDING, ERR_NONE);
 }
@@ -159,28 +178,72 @@ void stopFeeding(const char* source) {
   publishEvent(ST_IDLE, g_error);
 }
 
+void saveSchedulesToNvs() {
+  if (!schedulePrefsReady) return;
+  schedulePrefs.putUChar("count", scheduleCount);
+  for (uint8_t i = 0; i < scheduleCount; ++i) {
+    char key[8];
+    snprintf(key, sizeof(key), "en%u", (unsigned)i);
+    schedulePrefs.putBool(key, schedules[i].enabled);
+    snprintf(key, sizeof(key), "h%u", (unsigned)i);
+    schedulePrefs.putUChar(key, schedules[i].hour);
+    snprintf(key, sizeof(key), "m%u", (unsigned)i);
+    schedulePrefs.putUChar(key, schedules[i].minute);
+    snprintf(key, sizeof(key), "g%u", (unsigned)i);
+    schedulePrefs.putFloat(key, schedules[i].grams);
+    snprintf(key, sizeof(key), "f%u", (unsigned)i);
+    schedulePrefs.putInt(key, schedules[i].lastFiredSlot);
+  }
+}
+
+void loadSchedulesFromNvs() {
+  schedulePrefsReady = schedulePrefs.begin(NVS_NAMESPACE_SCHED, false);
+  if (!schedulePrefsReady) {
+    Serial.println("[SCHEDULE] Khong mo duoc NVS; dung lich RAM");
+    return;
+  }
+  g_sequence = schedulePrefs.getUInt("seq", 0);
+  scheduleCount = min(schedulePrefs.getUChar("count", 0), (uint8_t)MAX_SCHEDULES);
+  for (uint8_t i = 0; i < scheduleCount; ++i) {
+    char key[8];
+    snprintf(key, sizeof(key), "en%u", (unsigned)i);
+    schedules[i].enabled = schedulePrefs.getBool(key, false);
+    snprintf(key, sizeof(key), "h%u", (unsigned)i);
+    schedules[i].hour = min(schedulePrefs.getUChar(key, 0), (uint8_t)23);
+    snprintf(key, sizeof(key), "m%u", (unsigned)i);
+    schedules[i].minute = min(schedulePrefs.getUChar(key, 0), (uint8_t)59);
+    snprintf(key, sizeof(key), "g%u", (unsigned)i);
+    schedules[i].grams = constrain(schedulePrefs.getFloat(key, FEED_TARGET_GRAMS), 1.0f, 200.0f);
+    snprintf(key, sizeof(key), "f%u", (unsigned)i);
+    schedules[i].lastFiredSlot = schedulePrefs.getInt(key, -1);
+  }
+  Serial.printf("[SCHEDULE] Da nap %u lich tu NVS\n", (unsigned)scheduleCount);
+}
+
 // ---------------- Lịch hẹn giờ ----------------
 
 void checkSchedule() {
-  if (!schedule.enabled) {
-    return;
-  }
   const time_t now = time(nullptr);
   if (now < 1600000000) {
     return;  // chưa đồng bộ NTP
   }
   struct tm local;
   localtime_r(&now, &local);
-  if (local.tm_hour != schedule.hour || local.tm_min != schedule.minute) {
-    return;
+  for (uint8_t i = 0; i < scheduleCount; ++i) {
+    FeedingSchedule& schedule = schedules[i];
+    if (!schedule.enabled || local.tm_hour != schedule.hour ||
+        local.tm_min != schedule.minute) continue;
+    const int32_t slot = (int32_t)(((local.tm_year * 366L + local.tm_yday) * 24 +
+                                     local.tm_hour) * 60 + local.tm_min);
+    if (slot == schedule.lastFiredSlot) continue;
+    schedule.lastFiredSlot = slot;
+    if (schedulePrefsReady) {
+      char key[8];
+      snprintf(key, sizeof(key), "f%u", (unsigned)i);
+      schedulePrefs.putInt(key, slot);
+    }
+    startFeeding(schedule.grams, FEED_SRC_SCHEDULE);
   }
-  const int32_t slot = (int32_t)(local.tm_yday * 24 + local.tm_hour) * 60 +
-                       local.tm_min;
-  if (slot == schedule.lastFiredSlot) {
-    return;
-  }
-  schedule.lastFiredSlot = slot;
-  startFeeding(schedule.grams, "schedule");
 }
 
 // ---------------- Nút bấm ----------------
@@ -197,7 +260,7 @@ void handleButtons() {
 
   if (millis() > lockoutUntil) {
     if (lastFeed == HIGH && feed == LOW) {
-      startFeeding(FEED_TARGET_GRAMS, "button");
+      startFeeding(FEED_TARGET_GRAMS, FEED_SRC_BUTTON);
       lockoutUntil = millis() + 250;
     } else if (lastStop == HIGH && stop == LOW) {
       stopFeeding("button");
@@ -218,23 +281,38 @@ void handleButtons() {
 void handleCommands() {
   Command command;
   while (wsManager.popCommand(command)) {
+    bool ok = true;
     switch (command.type) {
       case CMD_FEED:
-        startFeeding(command.grams, "remote");
+        if (!command.expired) startFeeding(command.grams, FEED_SRC_MANUAL);
         break;
       case CMD_STOP:
         stopFeeding("remote");
         break;
       case CMD_SET_SCHEDULE:
-        schedule.enabled = command.enabled;
-        schedule.hour = command.hour;
-        schedule.minute = command.minute;
-        schedule.grams = command.grams;
-        schedule.lastFiredSlot = -1;
+        scheduleCount = 1;
+        schedules[0].enabled = command.enabled;
+        schedules[0].hour = command.hour;
+        schedules[0].minute = command.minute;
+        schedules[0].grams = command.grams;
+        schedules[0].lastFiredSlot = -1;
+        saveSchedulesToNvs();
         Serial.printf("[SCHEDULE] %s %02u:%02u - %.1f g\n",
-                      schedule.enabled ? "ON" : "OFF",
-                      (unsigned)schedule.hour, (unsigned)schedule.minute,
-                      (double)schedule.grams);
+                      schedules[0].enabled ? "ON" : "OFF",
+                      (unsigned)schedules[0].hour, (unsigned)schedules[0].minute,
+                      (double)schedules[0].grams);
+        break;
+      case CMD_SET_SCHEDULES:
+        scheduleCount = min(command.scheduleCount, (uint8_t)MAX_SCHEDULES);
+        for (uint8_t i = 0; i < scheduleCount; i++) {
+          schedules[i].enabled = command.schedules[i].enabled;
+          schedules[i].hour = command.schedules[i].hour;
+          schedules[i].minute = command.schedules[i].minute;
+          schedules[i].grams = command.schedules[i].grams;
+          schedules[i].lastFiredSlot = -1;
+        }
+        saveSchedulesToNvs();
+        Serial.printf("[SCHEDULE] Dong bo %u lich\n", (unsigned)scheduleCount);
         break;
       case CMD_CLEAR_ERROR:
         g_error = ERR_NONE;
@@ -242,8 +320,10 @@ void handleCommands() {
         Serial.println("[CMD] Xoa loi");
         break;
       default:
+        ok = false;
         break;
     }
+    wsManager.ackCommand(command.cid, ok);
   }
 }
 
@@ -347,6 +427,7 @@ void setup() {
   motor.begin();
   xTaskCreatePinnedToCore(motorLoopTask, "motor", 4096, nullptr, 2, nullptr, 1);
   ringBuffer.begin();
+  loadSchedulesFromNvs();
   wsManager.begin(&ringBuffer);
 
   // Giờ Việt Nam (UTC+7) cho lịch hẹn ăn.

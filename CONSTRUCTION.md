@@ -110,9 +110,10 @@ flowchart LR
 
 **Telemetry (thiết bị → Gateway)**, giữ nguyên định dạng hiện có:
 ```json
-{"v":1,"id":"esp01","s":104,"t":1763040000,"w":85.4,"l":72,"st":1,"e":0,"q":3}
+{"v":1,"id":"esp01","s":104,"t":1763040000,"w":85.4,"l":72,"st":1,"e":0,"src":2,"os":1,"q":3}
 ```
 `st`: 0 Idle, 1 Feeding, 2 Offline-Synced, 3 Error. `e`: 0 OK, 1 Jam, 2 Empty, 3 Sensor. `q`: số gói còn chờ (tùy chọn).
+`src`: nguồn cho ăn (0 không rõ, 1 manual, 2 schedule, 3 button). `os`: trạng thái gốc trước khi đánh dấu gói đã đồng bộ offline (`st=2`), để Gateway vẫn suy ra sự kiện cho ăn.
 
 **ACK (Gateway → thiết bị):** `{"ack":104}`, chỉ gửi **sau khi** bản ghi đã được ghi bền (spool, theo PR #5).
 
@@ -203,7 +204,7 @@ Ký hiệu ưu tiên: **P0** = bắt buộc để đạt `system.docx`/đề bà
 
 ### 3.1 SV1: Hardware & Embedded
 
-- [ ] **T-SV1-01 (P0): Nhiều lịch ăn + lưu bền qua NVS**
+- [x] **T-SV1-01 (P0): Nhiều lịch ăn + lưu bền qua NVS**
   - File: `firmware/src/main.cpp`
   - Chuyển `FeedingSchedule schedule` thành mảng tối đa 4 lịch; lưu/đọc bằng `Preferences` (namespace `petty-sched`); xử lý lệnh `SET_SCHEDULES`.
   - Ghi `source` khi bắt đầu cho ăn (`manual`/`schedule`/`button`) để Gateway suy ra `feeding_events`.
@@ -221,30 +222,32 @@ Ký hiệu ưu tiên: **P0** = bắt buộc để đạt `system.docx`/đề bà
 
 ### 3.2 SV2: Networking & Edge
 
-- [ ] **T-SV2-00 (P0): Hoàn tất PR #5 rồi merge**
+- [x] **T-SV2-00 (P0): Hoàn tất PR #5 rồi merge**
   - Sửa `firmware/merge_firmware.py` (`KeyError: 'tool-esptool'`: dùng `tool-esptoolpy` + `esptool.py` chạy bằng `sys.executable`).
   - Sửa `flushSpool()`: coi HTTP 409/duplicate là thành công để hàng đợi không bị kẹt ở bản ghi đầu.
   - **Nghiệm thu:** `pio run -d firmware` thành công và tạo `firmware.merged.bin`; restart Gateway rồi gửi lại gói trùng thì spool vẫn được xả hết.
-- [ ] **T-SV2-01 (P0): Gửi lệnh từ hàng đợi `device_commands`**
+- [x] **T-SV2-01 (P0): Gửi lệnh từ hàng đợi `device_commands`**
   - File: `backend-ws-gateway/server.js`, `firmware/src/ws_manager.cpp`, `firmware/include/packet_schema.h`
   - REST `/api/feed|stop|schedules` → `insert device_commands` → gửi ngay nếu thiết bị online. Khi thiết bị (re)connect: gửi toàn bộ lệnh `delivered_at is null` theo thứ tự `id`, rồi gửi `SET_SCHEDULES` hiện hành.
   - Firmware: parse `cid`, trả `{"cack":cid,"ok":true}`, bỏ qua `cid` trùng.
   - Lệnh `FEED` tạo quá 10 phút mà chưa gửi được thì hết hạn (`delivered_at` để null, đánh dấu `payload.expired=true`) để thiết bị không xả hạt bất ngờ khi online lại.
   - **Nghiệm thu:** bấm WIFI_DROP, đổi lịch trên App, bấm WIFI_DROP lần nữa để có mạng lại thì thiết bị nhận `SET_SCHEDULES` trong ≤ 5s; `delivered_at` được set.
-- [ ] **T-SV2-02 (P0): Phát hiện online/offline**
+- [x] **T-SV2-02 (P0): Phát hiện online/offline**
   - Khi socket thiết bị `close` hoặc heartbeat timeout: `PATCH devices set online=false`, broadcast `status`, gọi alert engine (`OFFLINE`) sau 60s nếu thiết bị chưa quay lại.
   - Khi `hello`: `online=true`, `last_seen=now()`.
   - **Nghiệm thu:** ngắt mạng thiết bị thì App hiển thị OFFLINE trong ≤ 60s, có 1 push `OFFLINE`; kết nối lại thì có push `ONLINE`.
-- [ ] **T-SV2-03 (P0): Alert engine trong Gateway**
+- [x] **T-SV2-03 (P0): Alert engine trong Gateway**
   - Module mới `backend-ws-gateway/alerts.js`: áp luật §2.7 trên mỗi telemetry; lưu trạng thái hysteresis/rate-limit theo `(device_id, kind)`; gọi `notify()` do SV3 cung cấp (T-SV3-04).
   - Suy ra `feeding_events` từ chuyển trạng thái `st` 1→0 (`dispensed_g` = cân sau − cân trước).
   - **Nghiệm thu:** unit test bằng `node --test` cho các luật LOW_FOOD (hysteresis), JAM, rate-limit.
-- [ ] **T-SV2-04 (P1): Bảo mật kênh thiết bị**
-  - Chuyển token thiết bị sang header `Authorization` (`setExtraHeaders`); Gateway đọc header trước, query string chỉ là fallback khi `NODE_ENV=development`.
-  - Bật cờ build `-D PETTY_TLS=1` để dùng `beginSSL(host, 443, path, rootCA)` khi deploy.
+- [x] **T-SV2-04 (P1): Bảo mật kênh thiết bị**
+  - Firmware gửi token bằng `Authorization` và ID bằng `X-Device-ID`; đường dẫn WS không chứa token. Gateway chỉ cho query token fallback ở development; production bắt buộc token và device ID từ header, đối chiếu SHA-256 với `device_credentials/{device_id}.token_hash`.
+  - Môi trường PlatformIO `production` bật `PETTY_TLS`, yêu cầu host/token/CA PEM qua environment và dùng `beginSslWithCA` để kiểm tra chứng thư. Có tiện ích `backend-ws-gateway/scripts/hash-device-token.js` để tạo hash cho credential.
   - **Nghiệm thu:** kết nối không có header bị từ chối với mã 4001; bản build TLS kết nối được tới Gateway đã deploy.
-- [ ] **T-SV2-05 (P2): Cấu hình Wokwi**
-  - Giữ cả 2 cách kết nối (`[[net.forward]]` + `target` và Private Gateway + `host.wokwi.internal`) bằng `#ifdef`, ghi hướng dẫn trong README.
+- [x] **T-SV2-05 (P2): Cấu hình Wokwi**
+  - Môi trường PlatformIO `wokwi` bật `PETTY_USE_WOKWI_PRIVATE_GW`, firmware dùng `host.wokwi.internal:8080` và WS path không mang token; `wokwi.toml` trỏ tới full merged image.
+  - Dùng Wokwi Private IoT Gateway để ESP32 truy cập Gateway host; `[[net.forward]]` chỉ chuyển kết nối host → ESP32, không phải phương án thay thế tương đương. Nếu Gateway bind loopback không truy cập được, bind `HOST=0.0.0.0` và giới hạn truy cập bằng firewall.
+  - **Nghiệm thu:** build full image và kết nối được khi tài khoản Wokwi có Private Gateway; tài khoản Community chỉ kiểm chứng boot mô phỏng.
 
 ### 3.3 SV3: Cloud, Security & App
 

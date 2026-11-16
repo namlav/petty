@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <WebSocketsClient.h>
 
 #include "config.h"
@@ -30,6 +31,7 @@ class WsManager {
     return _rb ? _rb->pendingCount() : 0;
   }
   bool popCommand(Command& out);
+  void ackCommand(uint32_t cid, bool ok);
   void toggleNetworkDrop();
   bool networkDropped() const { return _dropped; }
 
@@ -37,6 +39,7 @@ class WsManager {
   static const uint8_t COMMAND_QUEUE_SIZE = 4;
 
   WebSocketsClient _ws;
+  Preferences _cmdPrefs;
   RingBuffer* _rb = nullptr;
 
   WsState _state = STATE_OFFLINE_BUFFERING;
@@ -52,11 +55,16 @@ class WsManager {
   Command _commands[COMMAND_QUEUE_SIZE];
   uint8_t _commandHead = 0;
   uint8_t _commandCount = 0;
+  uint32_t _recentCids[CMD_DEDUP_WINDOW] = {};
+  uint8_t _recentCidCount = 0;
+  uint8_t _recentCidNext = 0;
 
   void _onEvent(WStype_t type, uint8_t* payload, size_t length);
   void _handleText(const char* text);
   void _handleAck(uint32_t seq);
-  void _queueCommand(const Command& cmd);
+  bool _queueCommand(const Command& cmd);
+  bool _hasRecentCid(uint32_t cid) const;
+  void _rememberCid(uint32_t cid);
   void _sendRecord(const TelemetryRecord& rec, bool offlineSynced);
   void _syncStep();
   void _applyBackoff();

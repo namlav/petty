@@ -146,28 +146,52 @@ function createAuthHelpers({
 
   function extractBearerToken(request) {
     const header = request?.headers?.authorization || '';
-    return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    const match = /^Bearer\s+(.+)$/i.exec(String(header).trim());
+    return match ? match[1].trim() : '';
   }
 
-  function deviceAuthorized(requestOrToken, queryToken = '') {
+  async function deviceAuthorized(requestOrToken, queryToken = '', requestedDeviceId = '') {
     let headerToken = '';
     let fallbackQuery = queryToken;
+    let deviceId = requestedDeviceId;
+    let headerDeviceId = '';
     if (typeof requestOrToken === 'string') {
       fallbackQuery = requestOrToken;
     } else if (requestOrToken && requestOrToken.headers) {
       headerToken = extractBearerToken(requestOrToken);
+      headerDeviceId = String(requestOrToken.headers['x-device-id'] || '').trim();
+      deviceId = headerDeviceId || deviceId;
     }
 
-    // TODO(T-SV2-04): Trên production, tra SHA-256(token) từ collection device_credentials trong Firestore.
+    // Production identity must come entirely from headers; URL credentials and IDs
+    // can be copied into proxy/access logs and are never accepted as device identity.
+    if (!isDev && (!headerToken || !headerDeviceId)) return false;
     const candidate = headerToken || (isDev ? fallbackQuery : '');
     if (!candidate) {
       return false;
     }
-    if (candidate === deviceToken) {
+    if (isDev && candidate === deviceToken) {
       return true;
     }
-    const claims = verifyToken(candidate);
-    return Boolean(claims && claims.role === 'device');
+    if (isDev) {
+      const claims = verifyToken(candidate);
+      if (claims?.role === 'device') return true;
+    }
+
+    if (isDev || !firestoreDb || !deviceId || deviceId.includes('/')) {
+      return false;
+    }
+    try {
+      const snap = await firestoreDb.collection('device_credentials').doc(deviceId).get();
+      const expectedHash = String(snap.data()?.token_hash || '').toLowerCase();
+      if (!/^[a-f0-9]{64}$/.test(expectedHash)) return false;
+      const actualHash = crypto.createHash('sha256').update(candidate).digest();
+      const expected = Buffer.from(expectedHash, 'hex');
+      return actualHash.length === expected.length && crypto.timingSafeEqual(actualHash, expected);
+    } catch (error) {
+      console.warn('[AUTH] Không xác minh được device_credentials:', error.message);
+      return false;
+    }
   }
 
   function auth(allowedRoles) {

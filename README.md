@@ -35,7 +35,7 @@ petty/
 │   ├── data/                       # Phân vùng LittleFS (.keep)
 │   ├── diagram.json                # Sơ đồ Wokwi (HX711, A4988 + stepper, HC-SR04, OLED, nút, LED)
 │   ├── platformio.ini
-│   └── wokwi.toml                  # Build path + net.forward localhost:8080
+│   └── wokwi.toml                  # Full merged image + Private IoT Gateway
 ├── backend-ws-gateway/             # [SV2 + SV3] Node.js WebSocket & REST Gateway
 │   ├── server.js                   # Express REST API, WebSocket relay, Firestore sync & 60s sweep
 │   ├── firebase.js                 # [SV3] Lazy-init firebase-admin (Firestore, Auth, Messaging)
@@ -109,9 +109,20 @@ pio run -t upload       # nạp board thật (nếu có)
 ### Chạy Wokwi Simulator
 
 1. Mở thư mục `firmware/` hoặc file `petty.code-workspace` bằng VS Code.
-2. Build trước để có `.pio/build/esp32dev/firmware.bin` và `.elf`.
+2. Build môi trường mô phỏng để tạo full image (gồm bootloader, partition table và LittleFS): `pio run -e wokwi`.
 3. `Ctrl+Shift+P` → **Wokwi: Start Simulator**.
-4. Bật gateway trước khi khởi động mô phỏng (`wokwi.toml` đã cấu hình `[[net.forward]]` từ `localhost:8080` → `target:8080`). Nếu dùng Wokwi Private IoT Gateway, thêm `-D PETTY_USE_WOKWI_PRIVATE_GW` vào `build_flags` trong `platformio.ini`.
+4. Bật Gateway local trước khi khởi động mô phỏng. Môi trường `wokwi` kết nối `host.wokwi.internal:8080` qua Wokwi Private IoT Gateway; chọn **Enable Private Wokwi IoT Gateway** trong VS Code. Build `wokwi` luôn gửi token trong header và dùng đường dẫn WebSocket không chứa token. Tài khoản chỉ có Public Gateway vẫn chạy mô phỏng nhưng không truy cập được dịch vụ trên máy host. `net.forward` chuyển kết nối từ host vào ESP32, không thay thế được kết nối do ESP32 khởi tạo. Nếu Gateway chỉ bind loopback mà Wokwi không truy cập được, đặt `HOST=0.0.0.0` khi chạy Gateway và giới hạn truy cập bằng firewall. Khi nạp board thật, đặt `PETTY_WS_HOST` thành hostname Gateway.
+5. Firmware luôn gửi token qua header `Authorization: Bearer ...` và ID qua `X-Device-ID`. Ở production, Gateway chỉ nhận token header và đối chiếu SHA-256 với `device_credentials/{device_id}.token_hash` trong Firestore. Để tạo hash, đưa token vào stdin của `node backend-ws-gateway/scripts/hash-device-token.js` rồi lưu kết quả vào document tương ứng.
+6. Build WSS production bằng môi trường riêng; script đọc host, token và CA PEM từ environment, nên không cần đặt bí mật vào `platformio.ini`:
+
+```powershell
+$env:PETTY_WS_HOST = "gateway.example.com"
+$env:PETTY_DEVICE_TOKEN = "<token-riêng-của-thiết-bị>"
+$env:PETTY_ROOT_CA_FILE = "C:\certs\root-ca.pem"
+pio run -e production
+```
+
+`production` bật TLS bắt buộc, kiểm tra chứng thư bằng CA với `beginSslWithCA`, và dừng build nếu thiếu host, token hoặc CA. Token được nhúng trong firmware image, vì vậy mỗi thiết bị cần token riêng và image cần được giữ kín.
 
 ### Sơ đồ chân (khớp `firmware/diagram.json`)
 
@@ -136,6 +147,7 @@ pio run -t upload       # nạp board thật (nếu có)
    - Tham khảo chi tiết schema và cơ chế tiết kiệm quota Spark tại `cloud-database/firestore_schema.md`.
 3. Tạo khóa Service Account JSON tại **Project Settings → Service Accounts → Generate new private key**, lưu vào `backend-ws-gateway/secrets/fcm-service-account.json` (đã ignore trong `.gitignore`).
 4. Trong `backend-ws-gateway/`, cài `npm install firebase-admin`, rồi điền `FIREBASE_PROJECT_ID=petty-68437` và `FIREBASE_SERVICE_ACCOUNT=./secrets/fcm-service-account.json` vào `backend-ws-gateway/.env`. Cơ chế quét thiết bị offline (60s) chạy trực tiếp trong Gateway mà không cần Cloud Functions (gói Blaze).
+5. Khi deploy production, tạo `device_credentials/{device_id}` trong Firestore với `token_hash` là SHA-256 (hex chữ thường) của token thiết bị. Firmware gửi token bằng `Authorization` và ID bằng `X-Device-ID`; raw token không được lưu trong Firestore.
 
 ---
 

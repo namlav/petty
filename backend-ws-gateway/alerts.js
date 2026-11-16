@@ -32,7 +32,6 @@ function createAlertEngine({
         offlineNotified: false,
         lastSentAt: new Map(), // kind -> timestamp ms
         lastStatus: null,
-        lastWeight: null,
         activeFeed: null, // { started_at, startWeight }
       };
       deviceStates.set(deviceId, state);
@@ -65,6 +64,9 @@ function createAlertEngine({
     const deviceId = record.device_id || 'esp01';
     const state = getState(deviceId);
     const emitted = [];
+    const feedingStatus = Number.isFinite(record.original_status)
+      ? record.original_status
+      : record.status;
 
     // 1) Mức thức ăn thấp (có hysteresis 15% / 25%)
     if (record.food_level < LOW_FOOD_THRESHOLD) {
@@ -117,19 +119,20 @@ function createAlertEngine({
     }
 
     // 3) Phát hiện sự kiện cho ăn (st: 1 -> 0 hoặc 3)
-    if (record.status === 1 && state.lastStatus !== 1) {
+    if (feedingStatus === 1 && state.lastStatus !== 1) {
       state.activeFeed = {
         started_at: record.recorded_at || new Date(now).toISOString(),
-        startWeight: state.lastWeight ?? record.weight_g,
+        startWeight: record.weight_g,
+        source: record.feed_source || 'manual',
       };
-    } else if (state.activeFeed && record.status !== 1 && record.status !== 2) {
+    } else if (state.activeFeed && feedingStatus !== 1 && feedingStatus !== 2) {
       const dispensed = Math.max(0, +(record.weight_g - state.activeFeed.startWeight).toFixed(1));
       const result = record.error_code === 1 ? 1 : record.error_code === 2 ? 3 : 0;
       onFeedingEvent({
         device_id: deviceId,
         started_at: state.activeFeed.started_at,
         finished_at: record.recorded_at || new Date(now).toISOString(),
-        source: 'manual', // TODO(T-SV1-01/T-SV2-03): đọc source từ telemetry/command nếu có
+        source: state.activeFeed.source,
         target_g: null,
         dispensed_g: dispensed,
         result,
@@ -137,8 +140,7 @@ function createAlertEngine({
       state.activeFeed = null;
     }
 
-    state.lastStatus = record.status;
-    state.lastWeight = record.weight_g;
+    state.lastStatus = feedingStatus;
     return emitted;
   }
 

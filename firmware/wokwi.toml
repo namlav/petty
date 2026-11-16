@@ -1,10 +1,9 @@
 [wokwi]
 version = 1
-firmware = ".pio/build/esp32dev/firmware.bin"
-elf = ".pio/build/esp32dev/firmware.elf"
+# Build first with `pio run -e wokwi`; this image targets host.wokwi.internal:8080.
+# Start the local Gateway and enable the Wokwi Private IoT Gateway in VS Code.
+firmware = ".pio/build/wokwi/firmware.merged.bin"
+elf = ".pio/build/wokwi/firmware.elf"
 
-# ESP32 chủ động kết nối ra Gateway trên máy host qua hostname DNS tích hợp
-# ws://host.wokwi.internal:8080/ws (không dùng [[net.forward]] cổng 8080 để tránh đụng cổng Gateway).
-# [[net.forward]]
-# from = "localhost:8080"
-# to = "target:8080"
+# ESP32 khởi tạo WebSocket tới host qua Private IoT Gateway.
+# net.forward chỉ hỗ trợ host -> ESP32, không dùng thay cho luồng này.
