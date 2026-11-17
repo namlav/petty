@@ -81,8 +81,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               title: Text('Thiết bị: ${state.selectedDeviceId} · $statusText'),
               subtitle: Text(
-                'Ring Buffer chờ đồng bộ (q): ${latest?.buffered ?? 0} gói'
-                '${latest != null && latest.errorCode > 0 ? ' · ${latest.errorLabel}' : ''}',
+                !state.gatewayConnected
+                    ? 'Chưa kết nối (${state.gatewayHttpUrl}) · kiểm tra Cài đặt'
+                    : 'Ring Buffer chờ đồng bộ (q): ${latest?.buffered ?? 0} gói'
+                        '${latest != null && latest.errorCode > 0 ? ' · ${latest.errorLabel}' : ''}',
               ),
               trailing: latest != null && latest.errorCode > 0 && canControl
                   ? TextButton(
@@ -92,6 +94,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   : null,
             ),
           ),
+          if (latest != null && latest.errorCode > 0) ...[
+            const SizedBox(height: 8),
+            Card(
+              color: Colors.red.shade50,
+              child: ListTile(
+                leading: Icon(
+                  Icons.warning_amber_rounded,
+                  color: Colors.red.shade700,
+                ),
+                title: Text(
+                  'Cảnh báo thiết bị: ${latest.errorLabel}',
+                  style: TextStyle(
+                    color: Colors.red.shade900,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                subtitle: const Text(
+                  'Kiểm tra họng xả/thùng hạt rồi nhấn Xoá lỗi',
+                ),
+                trailing: canControl
+                    ? FilledButton.tonal(
+                        onPressed: state.clearError,
+                        child: const Text('Xoá lỗi'),
+                      )
+                    : null,
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           Row(
             children: [

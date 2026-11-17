@@ -58,6 +58,7 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _tabIndex = 0;
+  String? _lastShownAlertId;
 
   static const _titles = [
     'Tổng quan',
@@ -77,7 +78,25 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    final unread = context.watch<AppState>().alerts.where((a) => !a.read).length;
+    final state = context.watch<AppState>();
+    final unread = state.alerts.where((a) => !a.read).length;
+    final liveAlert = state.pendingLiveAlert;
+    if (liveAlert != null && liveAlert.id != _lastShownAlertId) {
+      _lastShownAlertId = liveAlert.id;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        state.clearPendingLiveAlert();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              backgroundColor: Colors.red.shade700,
+              content: Text('⚠️ ${liveAlert.message}'),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+      });
+    }
 
     return Scaffold(
       appBar: AppBar(

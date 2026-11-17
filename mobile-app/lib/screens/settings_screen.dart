@@ -162,13 +162,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     border: OutlineInputBorder(),
                   ),
                 ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    ActionChip(
+                      label: const Text('USB (adb reverse 127.0.0.1)'),
+                      onPressed: () {
+                        _httpCtrl.text = 'http://127.0.0.1:8080';
+                        _wsCtrl.text = 'ws://127.0.0.1:8080/ws';
+                      },
+                    ),
+                    ActionChip(
+                      label: const Text('Emulator (10.0.2.2)'),
+                      onPressed: () {
+                        _httpCtrl.text = 'http://10.0.2.2:8080';
+                        _wsCtrl.text = 'ws://10.0.2.2:8080/ws';
+                      },
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 12),
                 FilledButton(
-                  onPressed: () {
-                    state.updateGatewayUrls(
+                  onPressed: () async {
+                    await state.updateGatewayUrls(
                       httpUrl: _httpCtrl.text,
                       wsUrl: _wsCtrl.text,
                     );
+                    if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Đã cập nhật URL Gateway')),
                     );

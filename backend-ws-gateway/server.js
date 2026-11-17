@@ -83,12 +83,15 @@ function rememberDevice(deviceId, fields = {}) {
 
 function clampFeedGrams(deviceId, requestedGrams) {
   const dev = knownDevices.get(deviceId);
+  if (Number(dev?.error_code) === 1) {
+    return { rejected: true, status: 409, error: 'device_jammed' };
+  }
   const capacity = Number(dev?.bowl_capacity_g) || DEFAULT_BOWL_CAPACITY_G;
   const bowlWeight = Number(dev?.bowl_weight_g) || 0;
   const requested = Math.max(1, Math.min(1000, Number(requestedGrams) || 30));
   const avail = +(capacity - bowlWeight).toFixed(1);
   if (bowlWeight >= capacity || avail < 1) {
-    return { rejected: true, error: 'bowl_full', bowl_weight_g: bowlWeight, bowl_capacity_g: capacity };
+    return { rejected: true, status: 400, error: 'bowl_full', bowl_weight_g: bowlWeight, bowl_capacity_g: capacity };
   }
   const grams = Math.min(requested, avail);
   return {
@@ -487,6 +490,9 @@ async function flushDeviceCommands(deviceId, socket) {
   }
   const capacity = Number(knownDevices.get(deviceId)?.bowl_capacity_g) || DEFAULT_BOWL_CAPACITY_G;
   socket.send(JSON.stringify({ cmd: 'SET_CONFIG', cid: 0, bowl_capacity_g: capacity }));
+  if (knownDevices.get(deviceId)?.sim_jam) {
+    socket.send(JSON.stringify({ cmd: 'SIM_JAM', cid: 0, on: true }));
+  }
 }
 
 setInterval(() => {
@@ -503,7 +509,7 @@ app.post('/api/feed', auth(['admin', 'owner']), async (req, res) => {
   if (!(await requireDeviceAccess(req, res, deviceId))) return;
   const check = clampFeedGrams(deviceId, req.body?.grams);
   if (check.rejected) {
-    return res.status(400).json({
+    return res.status(check.status || 400).json({
       error: check.error,
       bowl_weight_g: check.bowl_weight_g,
       bowl_capacity_g: check.bowl_capacity_g,
@@ -693,6 +699,7 @@ function deviceSnapshot(user = null) {
         ...publicFields,
         id,
         bowl_capacity_g: Number(publicFields.bowl_capacity_g) || DEFAULT_BOWL_CAPACITY_G,
+        sim_jam: Boolean(publicFields.sim_jam),
         online: connectedIds.has(id),
         last_seen: knownDevices.get(id)?.last_seen || null,
       };
@@ -818,6 +825,7 @@ async function onTelemetry(socket, message) {
     last_seen: record.recorded_at,
     bowl_weight_g: record.weight_g,
     food_level: record.food_level,
+    ...(!record.synced ? { error_code: record.error_code } : {}),
   });
 
   // ACK sau khi Firestore hoặc spool cục bộ xác nhận nhận dữ liệu bền.
@@ -1161,17 +1169,29 @@ async function onDashboardCommand(socket, message) {
   }
   const cmd = String(message.cmd || '').toUpperCase();
   if (cmd === 'SIM_JAM' || cmd === 'SIM_EAT' || cmd === 'SIM_REFILL') {
+    const simOn = Boolean(message.on);
     const payload = JSON.stringify({
       cmd,
-      ...(cmd === 'SIM_JAM' ? { on: Boolean(message.on) } : {}),
+      ...(cmd === 'SIM_JAM' ? { on: simOn } : {}),
       cid: 0,
     });
+    if (cmd === 'SIM_JAM') {
+      rememberDevice(deviceId, { sim_jam: simOn });
+      broadcastDeviceStatus();
+    }
+    let forwarded = 0;
     for (const dev of deviceSockets) {
       if (dev.deviceId === deviceId && dev.readyState === WebSocket.OPEN) {
         dev.send(payload);
+        forwarded++;
       }
     }
+    console.log(`[WOKWI] ${cmd}${cmd === 'SIM_JAM' ? ` on=${simOn}` : ''} (${deviceId}) -> ${forwarded} thiet bi`);
     return;
+  }
+  if (cmd === 'CLEAR_ERROR') {
+    rememberDevice(deviceId, { sim_jam: false, error_code: 0 });
+    broadcastDeviceStatus();
   }
   let feedPayload;
   if (cmd === 'FEED') {
