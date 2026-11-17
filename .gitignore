@@ -1,68 +1,54 @@
-# Prerequisites
+# ---- PlatformIO / firmware ----
+.pio/
+.pioenvs/
+.piolibdeps/
+firmware/.pio/
 *.d
-
-# Compiled Object files
-*.slo
-*.lo
 *.o
 *.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-*.so.*
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
 *.a
 *.lib
-
-# Executables
 *.exe
-*.out
-*.app
+*.elf
+*.bin
+*.map
 
-# Build directories
-build/
-Build/
-build-*/
+# ---- Node.js / backend ----
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.env
+.env.*
+!.env.example
+backend-ws-gateway/telemetry-spool.jsonl*
+backend-ws-gateway/secrets/
+**/service-account*.json
+**/fcm*.json
 
-# CMake generated files
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-install_manifest.txt
-compile_commands.json
+# ---- Flutter / mobile-app ----
+mobile-app/.dart_tool/
+mobile-app/build/
+mobile-app/.flutter-plugins*
+mobile-app/android/.gradle/
+mobile-app/android/local.properties
+mobile-app/android/app/google-services.json
+mobile-app/ios/Runner/GoogleService-Info.plist
+mobile-app/ios/Pods/
 
-# Temporary files
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
 *.tmp
 *.log
 *.bak
 *.swp
+.vscode/
+*.local.json
 
-# vcpkg
-vcpkg_installed/
+# ---- Local secrets ----
+agent/
+.codegraph/
 
-# debug information files
-*.dwo
-
-# test output & cache
-Testing/
+# ---- Tooling caches ----
 .cache/
+Testing/
