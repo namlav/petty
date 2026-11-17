@@ -253,6 +253,8 @@ void handleButtons() {
   static bool lastStop = HIGH;
   static bool lastDrop = HIGH;
   static uint32_t lockoutUntil = 0;
+  static uint32_t stopPressedAt = 0;
+  static bool stopHoldHandled = false;
 
   const bool feed = digitalRead(PIN_BTN_FEED);
   const bool stop = digitalRead(PIN_BTN_STOP);
@@ -263,6 +265,8 @@ void handleButtons() {
       startFeeding(FEED_TARGET_GRAMS, FEED_SRC_BUTTON);
       lockoutUntil = millis() + 250;
     } else if (lastStop == HIGH && stop == LOW) {
+      stopPressedAt = millis();
+      stopHoldHandled = false;
       stopFeeding("button");
       lockoutUntil = millis() + 250;
     } else if (lastDrop == HIGH && drop == LOW) {
@@ -271,9 +275,55 @@ void handleButtons() {
     }
   }
 
+  // Giữ nút STOP >= 3s khi không xả hạt để tare cân về 0g (T-SV1-03).
+  if (stop == LOW && !g_feeding && !stopHoldHandled &&
+      millis() - stopPressedAt >= 3000) {
+    stopHoldHandled = true;
+    loadCell.tare();
+    beepFeed();
+    Serial.println("[CAL] Giu STOP 3s -> Tare xong (0.0 g)");
+  } else if (stop == HIGH) {
+    stopHoldHandled = false;
+  }
+
   lastFeed = feed;
   lastStop = stop;
   lastDrop = drop;
+}
+
+// ---------------- Lệnh Serial hiệu chuẩn (T-SV1-03) ----------------
+
+void handleSerial() {
+  static char buf[32];
+  static size_t len = 0;
+  while (Serial.available() > 0) {
+    const char c = (char)Serial.read();
+    if (c == '\r' || c == '\n') {
+      if (len == 0) continue;
+      buf[len] = '\0';
+      len = 0;
+      if (strcmp(buf, "tare") == 0) {
+        loadCell.tare();
+        Serial.println("[CAL] Tare xong (0.0 g)");
+      } else if (strcmp(buf, "cal reset") == 0) {
+        loadCell.resetCalibration();
+        Serial.printf("[CAL] Reset ve mac dinh %.4f counts/g\n",
+                      (double)loadCell.scale());
+      } else if (strncmp(buf, "cal ", 4) == 0) {
+        const float grams = (float)atof(buf + 4);
+        if (loadCell.calibrate(grams)) {
+          Serial.printf("[CAL] Hieu chuan %.1fg -> %.4f counts/g (da luu NVS)\n",
+                        (double)grams, (double)loadCell.scale());
+        } else {
+          Serial.println("[CAL] Loi: nhap 'cal <gram>' > 0 khi da dat vat mau");
+        }
+      } else {
+        Serial.println("[CAL] Lenh ho tro: tare | cal <gram> | cal reset");
+      }
+    } else if (len < sizeof(buf) - 1) {
+      buf[len++] = c;
+    }
+  }
 }
 
 // ---------------- Lệnh từ Server ----------------
@@ -440,6 +490,7 @@ void loop() {
   wsManager.update();
   handleCommands();
   handleButtons();
+  handleSerial();
 
   static uint32_t lastSensorMs = 0;
   if (millis() - lastSensorMs >= SENSOR_INTERVAL_MS) {
@@ -449,8 +500,26 @@ void loop() {
       g_weight = 0;
     }
     g_level = readFoodLevel();
-    if (g_error == ERR_EMPTY_TANK && g_level >= 10) {
-      g_error = ERR_NONE;
+
+    if (loadCell.isFaulty()) {
+      if (g_error != ERR_SENSOR_FAULT) {
+        g_error = ERR_SENSOR_FAULT;
+        beepAlarm();
+        Serial.println("[ALERT] ERR_SENSOR_FAULT - HX711 khong phan hoi");
+        publishEvent(ST_ERROR, ERR_SENSOR_FAULT);
+      }
+    } else {
+      if (g_error == ERR_SENSOR_FAULT) {
+        g_error = ERR_NONE;
+      }
+      if (g_level < 5 && g_error == ERR_NONE) {
+        g_error = ERR_EMPTY_TANK;
+        beepReject();
+        Serial.println("[ALERT] ERR_EMPTY_TANK - thung het hat");
+        publishEvent(ST_ERROR, ERR_EMPTY_TANK);
+      } else if (g_error == ERR_EMPTY_TANK && g_level >= 10) {
+        g_error = ERR_NONE;
+      }
     }
   }
 

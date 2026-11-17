@@ -91,7 +91,21 @@ Telemetry thêm `src` để giữ nguồn cho ăn (`0` không rõ, `1` manual, `
   1. NEMA 17 có mô-men xoắn lớn và ổn định hơn để đẩy hạt thức ăn đặc, ít trượt bước khi tải nặng.
   2. A4988 hỗ trợ điều khiển qua 2 chân `STEP/DIR` kèm chân `ENABLE` giúp ngắt dòng tức thời khi phát hiện kẹt hạt (`ERR_JAM`), tránh quá nhiệt cuộn dây.
   3. Wokwi hỗ trợ sẵn mô phỏng chuẩn cặp `wokwi-a4988` + `wokwi-stepper-motor`.
-* Nếu chuyển sang phần cứng giá rẻ dùng **28BYJ-48 + ULN2003**, chỉ cần đổi khởi tạo `AccelStepper` trong `firmware/include/motor_control.h` sang chế độ `AccelStepper::FULL4WIRE` với 4 chân GPIO `IN1..IN4` và hiệu chỉnh lại `RETRACT_STEPS`.
+* Nếu chuyển sang phần cứng giá rẻ dùng **28BYJ-48 + ULN2003**, đổi khởi tạo `AccelStepper` trong `firmware/include/motor_control.h` sang chế độ `AccelStepper::FULL4WIRE`:
+  ```cpp
+  // Thứ tự 1-3-2-4 chuẩn cho động cơ bước 4 pha 28BYJ-48
+  AccelStepper _stepper{AccelStepper::FULL4WIRE, 19, 18, 23, 15};
+  ```
+  Bảng ánh xạ sơ đồ chân thay thế trên ESP32:
+
+  | Chân driver ULN2003 | GPIO ESP32 | Ghi chú thay thế cho A4988 |
+  |---|---:|---|
+  | `IN1` | `19` | Thay cho `PIN_STEP` |
+  | `IN2` | `23` | Thay cho `PIN_DIR` |
+  | `IN3` | `18` | Thay cho `PIN_ENABLE` |
+  | `IN4` | `15` | GPIO trống trên sơ đồ hiện tại |
+
+  Hiệu chỉnh lại `STEPPER_STEPS_PER_REV = 2048` và `RETRACT_STEPS = 340` ($\approx 60^\circ$ cho hộp số 1:64).
 
 ---
 
