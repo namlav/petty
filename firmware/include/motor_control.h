@@ -28,6 +28,8 @@ class MotorControl {
   bool isJammed() const { return _state == MOTOR_JAMMED; }
   bool consumeJamEvent();  // true đúng 1 lần sau khi kẹt hạt
   void clearJam();
+  void setSimulatedJam(bool on) { _simJam = on; }
+  bool simulatedJam() const { return _simJam; }
   MotorState state() const { return _state; }
   uint8_t retryCount() const { return _retry; }
 
@@ -37,6 +39,7 @@ class MotorControl {
   uint32_t _cycleStart = 0;
   uint8_t _retry = 0;
   bool _jamEvent = false;
+  bool _simJam = false;
 
   void _enable(bool on);
   void _halt();

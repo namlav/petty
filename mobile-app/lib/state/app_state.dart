@@ -40,6 +40,13 @@ class AppState extends ChangeNotifier {
       devices.any((d) => d.id == selectedDeviceId && d.online) ||
       (latest != null && latest!.status != 3);
 
+  double get bowlCapacityG {
+    for (final d in devices) {
+      if (d.id == selectedDeviceId) return d.bowlCapacityG;
+    }
+    return 120;
+  }
+
   Future<void> init() async {
     session = await _authService.restoreSession();
     if (session != null) {
@@ -138,7 +145,25 @@ class AppState extends ChangeNotifier {
           notifyListeners();
         }
       },
+      onDeviceConfig: (deviceId, capacity) {
+        _applyBowlCapacity(deviceId, capacity);
+      },
     )..connect();
+  }
+
+  void _applyBowlCapacity(String deviceId, double capacity) {
+    final idx = devices.indexWhere((d) => d.id == deviceId);
+    if (idx >= 0) {
+      devices[idx] = devices[idx].copyWith(bowlCapacityG: capacity);
+    } else {
+      devices.add(DeviceInfo(
+        id: deviceId,
+        name: 'Pet Feeder - $deviceId',
+        online: isDeviceOnline,
+        bowlCapacityG: capacity,
+      ));
+    }
+    notifyListeners();
   }
 
   Future<void> refreshAll() async {
@@ -182,9 +207,24 @@ class AppState extends ChangeNotifier {
     final gw = _gateway;
     if (gw == null) return 'Chưa kết nối Gateway';
     final res = await gw.feedNow(selectedDeviceId, grams);
-    return res['ok'] == true
-        ? 'Đã gửi lệnh cho ăn ${grams.toStringAsFixed(0)} g'
-        : 'Thiết bị đang offline, chưa nhận lệnh';
+    if (res['ok'] != true) {
+      return 'Thiết bị đang offline, chưa nhận lệnh';
+    }
+    final actual = (res['grams'] as num?)?.toDouble() ?? grams;
+    if (res['clamped'] == true) {
+      final cap = (res['bowl_capacity_g'] as num?)?.toDouble() ?? bowlCapacityG;
+      return 'Bát sắp đầy: tự cắt còn ${actual.toStringAsFixed(0)} g (vừa đầy ${cap.toStringAsFixed(0)} g)';
+    }
+    return 'Đã gửi lệnh cho ăn ${actual.toStringAsFixed(0)} g';
+  }
+
+  Future<double> updateBowlCapacity(double grams) async {
+    final gw = _gateway;
+    if (gw == null) throw Exception('Chưa kết nối Gateway');
+    final res = await gw.updateDeviceConfig(selectedDeviceId, bowlCapacityG: grams);
+    final updated = (res['bowl_capacity_g'] as num?)?.toDouble() ?? grams;
+    _applyBowlCapacity(selectedDeviceId, updated);
+    return updated;
   }
 
   Future<String> stopFeeding() async {

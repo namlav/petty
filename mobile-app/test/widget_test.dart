@@ -24,6 +24,7 @@ void main() {
 
     expect(find.text('Tổng quan'), findsWidgets);
     expect(find.text('Cho ăn ngay'), findsOneWidget);
+    expect(find.text('Dung tích bát: 120 g'), findsOneWidget);
 
     await tester.tap(find.text('Lịch ăn'));
     await tester.pumpAndSettle();
@@ -39,6 +40,7 @@ void main() {
 
     await tester.tap(find.text('Cài đặt'));
     await tester.pumpAndSettle();
+    expect(find.text('Lưu bát'), findsOneWidget);
     expect(find.text('Đăng xuất'), findsOneWidget);
   });
 }

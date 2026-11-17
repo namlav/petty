@@ -63,6 +63,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     final levelPct = latest?.foodLevel ?? 0;
     final weightG = latest?.weightG ?? 0;
+    final bowlCapG = state.bowlCapacityG;
+    final sliderMax = bowlCapG.clamp(50.0, 1000.0);
+    final sliderDivisions = ((sliderMax - 10) / 10).round().clamp(1, 99);
+    final sliderValue = _feedGrams.clamp(10.0, sliderMax);
 
     return RefreshIndicator(
       onRefresh: state.refreshAll,
@@ -96,6 +100,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   icon: Icons.scale,
                   label: 'Khối lượng khay',
                   value: '${weightG.toStringAsFixed(1)} g',
+                  subtitle: 'Dung tích bát: ${bowlCapG.toStringAsFixed(0)} g',
+                  progress: bowlCapG > 0 ? (weightG / bowlCapG) : null,
                 ),
               ),
               const SizedBox(width: 12),
@@ -127,17 +133,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       const Text('Khẩu phần:'),
                       Expanded(
                         child: Slider(
-                          value: _feedGrams,
+                          value: sliderValue,
                           min: 10,
-                          max: 200,
-                          divisions: 19,
-                          label: '${_feedGrams.toInt()} g',
+                          max: sliderMax,
+                          divisions: sliderDivisions,
+                          label: '${sliderValue.toInt()} g',
                           onChanged: canControl
                               ? (v) => setState(() => _feedGrams = v)
                               : null,
                         ),
                       ),
-                      Text('${_feedGrams.toInt()} g'),
+                      Text('${sliderValue.toInt()} g'),
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -186,6 +192,7 @@ class _MetricCard extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
+  final String? subtitle;
   final double? progress;
   final bool lowWarning;
 
@@ -193,6 +200,7 @@ class _MetricCard extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
+    this.subtitle,
     this.progress,
     this.lowWarning = false,
   });
@@ -215,6 +223,10 @@ class _MetricCard extends StatelessWidget {
                     color: lowWarning ? Colors.red : null,
                   ),
             ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 2),
+              Text(subtitle!, style: Theme.of(context).textTheme.bodySmall),
+            ],
             if (progress != null) ...[
               const SizedBox(height: 8),
               LinearProgressIndicator(

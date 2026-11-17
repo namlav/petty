@@ -1,16 +1,85 @@
 #include "sensor_filter.h"
 
+#include <Preferences.h>
+
 void SensorFilter::begin() {
+  Preferences calPrefs;
+  if (calPrefs.begin(NVS_NAMESPACE_CAL, false)) {
+    const float saved = calPrefs.getFloat("scale", HX711_COUNTS_PER_GRAM);
+    calPrefs.end();
+    if (isfinite(saved) && saved > 0.0f) {
+      _countsPerGram = saved;
+    }
+  }
+
   _scale.begin(PIN_HX711_DOUT, PIN_HX711_SCK);
-  _scale.set_scale(HX711_COUNTS_PER_GRAM);
+  _scale.set_scale(_countsPerGram);
   // Tare khi khay trống. Với loadcell thật: đặt khay rỗng rồi mới tare.
   delay(200);
   if (_scale.is_ready()) {
     _scale.tare(10);
     _ready = true;
+    Serial.printf("[CAL] scale=%.4f counts/g\n", (double)_countsPerGram);
   } else {
     Serial.println("[SENSOR] HX711 khong san sang - dung gia tri 0");
   }
+}
+
+void SensorFilter::_saveScale(float scale) {
+  _countsPerGram = scale;
+  _scale.set_scale(_countsPerGram);
+  Preferences calPrefs;
+  if (calPrefs.begin(NVS_NAMESPACE_CAL, false)) {
+    calPrefs.putFloat("scale", _countsPerGram);
+    calPrefs.end();
+  }
+}
+
+void SensorFilter::tare() {
+  _medianIndex = 0;
+  _medianCount = 0;
+  _ema = 0;
+  _emaInitialized = false;
+  _stableIndex = 0;
+  _stableCount = 0;
+  _stable = false;
+  if (_scale.wait_ready_timeout(300)) {
+    _scale.tare(10);
+    _ready = true;
+    _faultCount = 0;
+  }
+}
+
+bool SensorFilter::calibrate(float knownGrams) {
+  if (knownGrams <= 0.0f || !_scale.wait_ready_timeout(500)) {
+    return false;
+  }
+  const double raw = _scale.get_value(10);
+  if (!isfinite(raw) || raw <= 1.0) {
+    return false;
+  }
+  const float newScale = (float)(raw / knownGrams);
+  if (!isfinite(newScale) || newScale <= 0.0f) {
+    return false;
+  }
+  _saveScale(newScale);
+  _medianIndex = 0;
+  _medianCount = 0;
+  _emaInitialized = false;
+  _stableCount = 0;
+  _stable = false;
+  _ready = true;
+  _faultCount = 0;
+  return true;
+}
+
+void SensorFilter::resetCalibration() {
+  _saveScale(HX711_COUNTS_PER_GRAM);
+  _medianIndex = 0;
+  _medianCount = 0;
+  _emaInitialized = false;
+  _stableCount = 0;
+  _stable = false;
 }
 
 float SensorFilter::medianOf(float* values, uint8_t n) {
@@ -28,8 +97,16 @@ float SensorFilter::medianOf(float* values, uint8_t n) {
 }
 
 float SensorFilter::update() {
-  if (!_ready || !_scale.is_ready()) {
+  if (!_scale.is_ready()) {
+    if (_faultCount < 15) {
+      _faultCount++;
+    }
     return _ema;
+  }
+  _faultCount = 0;
+  if (!_ready) {
+    _scale.tare(5);
+    _ready = true;
   }
 
   float raw = _scale.get_units(1);
