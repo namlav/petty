@@ -101,7 +101,29 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
     } else {
       updated[index] = item;
     }
-    await state.saveSchedules(updated);
+    if (!context.mounted) return;
+    await _saveWithFeedback(context, state, updated);
+  }
+
+  Future<void> _saveWithFeedback(
+    BuildContext context,
+    AppState state,
+    List<FeedingScheduleItem> items,
+  ) async {
+    try {
+      await state.saveSchedules(items);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Đã lưu lịch cho ăn')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi lưu lịch: $e')),
+        );
+      }
+    }
   }
 
   @override
@@ -133,7 +155,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                               ? (val) {
                                   final copy = List<FeedingScheduleItem>.from(items);
                                   copy[i] = item.copyWith(enabled: val);
-                                  state.saveSchedules(copy);
+                                  _saveWithFeedback(context, state, copy);
                                 }
                               : null,
                         ),
@@ -153,7 +175,7 @@ class _SchedulesScreenState extends State<SchedulesScreen> {
                             onPressed: () {
                               final copy = List<FeedingScheduleItem>.from(items)
                                 ..removeAt(i);
-                              state.saveSchedules(copy);
+                              _saveWithFeedback(context, state, copy);
                             },
                           ),
                       ],

@@ -14,7 +14,6 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _emailCtrl = TextEditingController(text: 'owner@petty.local');
   final _passCtrl = TextEditingController();
-  final _tokenCtrl = TextEditingController();
   String _demoRole = 'owner';
   String? _error;
 
@@ -22,7 +21,6 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _emailCtrl.dispose();
     _passCtrl.dispose();
-    _tokenCtrl.dispose();
     super.dispose();
   }
 
@@ -33,7 +31,6 @@ class _LoginScreenState extends State<LoginScreen> {
             email: _emailCtrl.text.trim(),
             password: _passCtrl.text,
             demoRole: _demoRole,
-            manualToken: _tokenCtrl.text,
           );
     } catch (e) {
       if (mounted) {
@@ -105,17 +102,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       items: const [
                         DropdownMenuItem(value: 'owner', child: Text('Owner (Chủ nuôi)')),
                         DropdownMenuItem(value: 'viewer', child: Text('Viewer (Member)')),
-                        DropdownMenuItem(value: 'admin', child: Text('Admin')),
                       ],
                       onChanged: (v) => setState(() => _demoRole = v ?? 'owner'),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _tokenCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'JWT Token Gateway (tuỳ chọn)',
-                        border: OutlineInputBorder(),
-                      ),
                     ),
                     if (_error != null) ...[
                       const SizedBox(height: 12),

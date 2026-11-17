@@ -160,6 +160,12 @@ void startFeeding(float grams, FeedSource source) {
     Serial.printf("[FEED] Cat giam %.1f -> %.1f g theo dung tich bat %.1f g\n",
                   (double)grams, (double)actualGrams, (double)g_bowlCapacity);
   }
+  if (g_error == ERR_JAM || motor.isJammed()) {
+    Serial.println("[FEED] Tu choi: may dang ket hat, can xoa loi truoc");
+    beepReject();
+    publishEvent(ST_ERROR, ERR_JAM);
+    return;
+  }
   if (g_level < 5) {
     Serial.println("[FEED] Tu choi: thung het hat");
     g_error = ERR_EMPTY_TANK;
@@ -168,9 +174,6 @@ void startFeeding(float grams, FeedSource source) {
     return;
   }
 
-  if (motor.isJammed()) {
-    motor.clearJam();
-  }
   g_error = ERR_NONE;
   g_feedSource = source;
   g_feeding = true;
@@ -617,7 +620,12 @@ void loop() {
   }
 
   if (g_feeding) {
-    if (!motor.isFeeding() && !motor.isJammed()) {
+    if (motor.simulatedJam()) {
+      // Đang giả lập kẹt hạt: tuyệt đối không hoàn tất thành công; chờ ERR_JAM hoặc ép kẹt nếu motor dừng bất thường.
+      if (!motor.isFeeding() && !motor.isJammed()) {
+        motor.forceJam();
+      }
+    } else if (!motor.isFeeding() && !motor.isJammed()) {
       finishFeeding(true);  // LIMIT_SW báo hoàn tất một chu kỳ
     } else if (g_weight >= g_targetWeight || g_weight >= g_bowlCapacity) {
       finishFeeding(true);  // đủ khẩu phần hoặc chạm dung tích bát

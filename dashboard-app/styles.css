@@ -95,18 +95,6 @@ h2 {
   box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.18);
 }
 
-.token-box {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.78rem;
-  color: var(--muted);
-}
-
-.token-box input {
-  width: 170px;
-}
-
 main {
   max-width: 1120px;
   margin: 0 auto;
@@ -381,14 +369,6 @@ footer {
 @media (max-width: 560px) {
   .topbar-right {
     width: 100%;
-  }
-
-  .token-box {
-    width: 100%;
-  }
-
-  .token-box input {
-    flex: 1;
   }
 
   .value {

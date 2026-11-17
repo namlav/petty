@@ -11,7 +11,7 @@ const ERROR_LABEL = ['OK', 'Jammed', 'Empty tank', 'Sensor fault'];
 
 const state = {
   socket: null,
-  token: localStorage.getItem('petty.token') || '',
+  token: new URLSearchParams(location.search).get('token') || '',
   reconnectDelay: 1000,
   lastTelemetryAt: 0,
   deviceId: null,
@@ -124,7 +124,7 @@ function handleMessage(message) {
       }
       break;
     case 'error':
-      notify(`Lỗi: ${message.error === 'bowl_full' ? 'Bát đã đầy, không thể xả thêm' : message.error}`);
+      notify(`Lỗi: ${message.error === 'bowl_full' ? 'Bát đã đầy, không thể xả thêm' : message.error === 'device_jammed' ? 'Thiết bị đang kẹt hạt, hãy kiểm tra và Xóa lỗi trước' : message.error}`);
       break;
     case 'alert':
       notify(message.data?.message || 'Có cảnh báo mới');
@@ -147,6 +147,10 @@ function applyDeviceStatus(devices) {
   state.gatewayDeviceOnline = Boolean(device.online);
   if (device.bowl_capacity_g != null) {
     setBowlCapacity(device.bowl_capacity_g);
+  }
+  const simCheck = $('simJamCheck');
+  if (simCheck && device.sim_jam !== undefined) {
+    simCheck.checked = Boolean(device.sim_jam);
   }
   setDevicePresence(state.gatewayDeviceOnline, device.last_seen);
 }
@@ -423,7 +427,9 @@ async function requestJson(method, url, body) {
       const payload = await response.json().catch(() => ({}));
       const msg = payload.error === 'bowl_full'
         ? `Bát đã đầy (${Number(payload.bowl_weight_g || 0).toFixed(1)} / ${payload.bowl_capacity_g || state.bowlCapacity} g), từ chối xả thêm`
-        : (payload.error || `HTTP ${response.status}`);
+        : payload.error === 'device_jammed'
+          ? 'Thiết bị đang bị kẹt hạt, hãy kiểm tra và Xóa lỗi trước'
+          : (payload.error || `HTTP ${response.status}`);
       throw new Error(msg);
     }
     return await response.json();
@@ -439,14 +445,8 @@ const postJson = (url, body) => requestJson('POST', url, body);
 // Khởi động
 // ------------------------------------------------------------
 function init() {
-  $('token').value = state.token;
-  $('simJamCheck').checked = localStorage.getItem('petty.simJam') === '1';
-
-  $('connectBtn').addEventListener('click', () => {
-    state.token = $('token').value.trim();
-    localStorage.setItem('petty.token', state.token);
-    connect();
-  });
+  localStorage.removeItem('petty.token');
+  localStorage.removeItem('petty.simJam');
 
   $('feedBtn').addEventListener('click', async () => {
     if (state.lastWeight !== null && state.lastWeight >= state.bowlCapacity) {
@@ -500,15 +500,14 @@ function init() {
       return;
     }
     $('simJamCheck').checked = false;
-    localStorage.setItem('petty.simJam', '0');
     state.socket.send(JSON.stringify({ cmd: 'CLEAR_ERROR', device: state.deviceId || 'esp01' }));
     notify('Đã xóa lỗi & tắt giả lập kẹt hạt');
   });
 
   $('simJamCheck').addEventListener('change', () => {
     const on = Boolean($('simJamCheck').checked);
-    localStorage.setItem('petty.simJam', on ? '1' : '0');
     if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
+      $('simJamCheck').checked = !on;
       notify('Chưa kết nối tới Gateway');
       return;
     }
