@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <sys/time.h>
 
 void WsManager::begin(RingBuffer* ringBuffer) {
   _rb = ringBuffer;
@@ -156,8 +157,10 @@ void WsManager::ackCommand(uint32_t cid, bool ok) {
 
 void WsManager::_sendRecord(const TelemetryRecord& rec, bool offlineSynced) {
   char payload[160];
-  encodeTelemetryJson(rec, payload, sizeof(payload), offlineSynced,
-                      _rb ? _rb->pendingCount() : 0);
+  // Khong tinh goi dang truyen cho ACK de card Ring Buffer chi tang khi co ton dong.
+  const uint16_t queuedBehind =
+      (_rb && _rb->pendingCount() > 0) ? (uint16_t)(_rb->pendingCount() - 1) : 0;
+  encodeTelemetryJson(rec, payload, sizeof(payload), offlineSynced, queuedBehind);
   _ws.sendTXT(payload);
   Serial.printf("[WS] %s s=%lu t=%lu w=%.1f l=%u st=%u e=%u\n",
                 offlineSynced ? "SYNC" : "TX", (unsigned long)rec.seq,
@@ -267,7 +270,7 @@ void WsManager::_onEvent(WStype_t type, uint8_t* payload, size_t length) {
     }
 
     case WStype_TEXT: {
-      char text[192];
+      char text[320];
       const size_t n = length < sizeof(text) - 1 ? length : sizeof(text) - 1;
       memcpy(text, payload, n);
       text[n] = '\0';
@@ -289,6 +292,11 @@ void WsManager::_handleText(const char* text) {
   if (deserializeJson(doc, text) != DeserializationError::Ok) {
     Serial.printf("[WS] JSON loi: %s\n", text);
     return;
+  }
+
+  if (doc["ts"].is<uint64_t>()) {
+    struct timeval tv = {(time_t)doc["ts"].as<uint64_t>(), 0};
+    settimeofday(&tv, nullptr);
   }
 
   if (doc["ack"].is<uint32_t>()) {
@@ -330,6 +338,16 @@ void WsManager::_handleText(const char* text) {
     }
   } else if (strcmp(cmd, "CLEAR_ERROR") == 0) {
     command.type = CMD_CLEAR_ERROR;
+  } else if (strcmp(cmd, "SIM_JAM") == 0) {
+    command.type = CMD_SIM_JAM;
+    command.enabled = doc["on"] | false;
+  } else if (strcmp(cmd, "SIM_EAT") == 0) {
+    command.type = CMD_SIM_EAT;
+  } else if (strcmp(cmd, "SET_CONFIG") == 0) {
+    command.type = CMD_SET_CONFIG;
+    command.bowlCapacity = doc["bowl_capacity_g"] | BOWL_FULL_GRAMS;
+  } else if (strcmp(cmd, "SIM_REFILL") == 0) {
+    command.type = CMD_SIM_REFILL;
   } else {
     Serial.printf("[WS] Lenh khong ho tro: %s\n", cmd);
     return;

@@ -209,14 +209,14 @@ Ký hiệu ưu tiên: **P0** = bắt buộc để đạt `system.docx`/đề bà
   - Chuyển `FeedingSchedule schedule` thành mảng tối đa 4 lịch; lưu/đọc bằng `Preferences` (namespace `petty-sched`); xử lý lệnh `SET_SCHEDULES`.
   - Ghi `source` khi bắt đầu cho ăn (`manual`/`schedule`/`button`) để Gateway suy ra `feeding_events`.
   - **Nghiệm thu:** đặt 2 lịch, reboot ESP32 khi đang offline thì 2 lịch vẫn chạy đúng giờ (đã có NTP); mỗi slot chỉ chạy 1 lần.
-- [ ] **T-SV1-02 (P1): Giải trình driver stepper**
-  - File: `README.md` §7, tài liệu Câu 1
+- [x] **T-SV1-02 (P1): Giải trình driver stepper**
+  - File: `README.md` §7, `docs/architecture.md` §3.1
   - Ghi rõ A4988 + NEMA17 thay cho ULN2003 + 28BYJ-48 (docx cho phép NEMA17; Wokwi không có ULN2003 cho stepper 2 pha; A4988 cho phép vi bước và tắt dòng bằng EN khi kẹt). Nêu cách đổi sang 28BYJ-48 (dùng AccelStepper `FULL4WIRE` với 4 chân IN1–IN4).
   - **Nghiệm thu:** tài liệu có đoạn so sánh và sơ đồ chân thay thế.
-- [ ] **T-SV1-03 (P2): Quy trình hiệu chuẩn loadcell**
-  - Thêm lệnh Serial `cal <gram>` / nút giữ 3s để tare + tính `counts_per_gram`, lưu NVS.
+- [x] **T-SV1-03 (P2): Quy trình hiệu chuẩn loadcell**
+  - Thêm lệnh Serial `tare` / `cal <gram>` / `cal reset` và giữ nút `STOP` 3s để tare + tính `counts_per_gram`, lưu NVS (`petty-cal`).
   - **Nghiệm thu:** đặt vật 100g, sai số ≤ ±1g sau khi hiệu chuẩn (trên phần cứng thật).
-- [ ] **T-SV1-04 (P1): Đẩy sự kiện lỗi kịp thời**
+- [x] **T-SV1-04 (P1): Đẩy sự kiện lỗi kịp thời**
   - Đảm bảo `ERR_JAM`, `ERR_EMPTY_TANK`, `ERR_SENSOR_FAULT` được `publishEvent` ngay khi xảy ra (không đợi chu kỳ 5s) và ghi vào Flash nếu đang offline (sự kiện quan trọng, theo CONFIG.md).
   - **Nghiệm thu:** giữ limit switch không nhả trong Wokwi thì Gateway nhận `e=1` trong ≤ 1s sau khi hết 3 lần thử.
 

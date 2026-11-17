@@ -63,6 +63,8 @@ let nextCommandId = crypto.randomInt(1, 0x100000000);
 const offlineTimers = new Map();
 
 const schedulesByDevice = new Map();
+const DEFAULT_BOWL_CAPACITY_G = 120;
+
 function getDeviceSchedules(deviceId = 'esp01') {
   if (!schedulesByDevice.has(deviceId)) {
     schedulesByDevice.set(deviceId, [{ hour: 8, minute: 0, grams: 30, enabled: false }]);
@@ -77,6 +79,29 @@ function rememberDevice(deviceId, fields = {}) {
     ...fields,
     id: deviceId,
   });
+}
+
+function clampFeedGrams(deviceId, requestedGrams) {
+  const dev = knownDevices.get(deviceId);
+  if (Number(dev?.error_code) === 1) {
+    return { rejected: true, status: 409, error: 'device_jammed' };
+  }
+  const capacity = Number(dev?.bowl_capacity_g) || DEFAULT_BOWL_CAPACITY_G;
+  const bowlWeight = Number(dev?.bowl_weight_g) || 0;
+  const requested = Math.max(1, Math.min(1000, Number(requestedGrams) || 30));
+  const avail = +(capacity - bowlWeight).toFixed(1);
+  if (bowlWeight >= capacity || avail < 1) {
+    return { rejected: true, status: 400, error: 'bowl_full', bowl_weight_g: bowlWeight, bowl_capacity_g: capacity };
+  }
+  const grams = Math.min(requested, avail);
+  return {
+    rejected: false,
+    grams,
+    requested,
+    clamped: grams < requested,
+    bowl_capacity_g: capacity,
+    bowl_weight_g: bowlWeight,
+  };
 }
 
 function canAccessDeviceRecord(user, device) {
@@ -196,6 +221,7 @@ app.get('/api/devices', auth(['admin', 'owner', 'viewer']), async (req, res) => 
         return {
           ...row,
           id,
+          bowl_capacity_g: Number(row.bowl_capacity_g) || DEFAULT_BOWL_CAPACITY_G,
           online: connectedMap.has(id) ? Boolean(connectedMap.get(id).online) : Boolean(row.online),
         };
       }).sort((a, b) => a.id.localeCompare(b.id));
@@ -220,6 +246,7 @@ app.get('/api/devices', auth(['admin', 'owner', 'viewer']), async (req, res) => 
       online: connectedMap.has(id),
       last_seen: latest?.recorded_at || null,
       portion_grams: 30,
+      bowl_capacity_g: Number(knownDevices.get(id)?.bowl_capacity_g) || DEFAULT_BOWL_CAPACITY_G,
       bowl_weight_g: latest?.weight_g ?? 0,
       food_level: latest?.food_level ?? 0,
     };
@@ -376,16 +403,20 @@ async function saveCommandOrRespond(entry, res) {
 
 function wireCommand(entry) {
   const payload = entry.payload || {};
+  const ts = Math.floor(Date.now() / 1000);
   if (entry.command === 'FEED') return { cmd: 'FEED', g: payload.g, cid: entry.cid };
   if (entry.command === 'STOP') return { cmd: 'STOP', cid: entry.cid };
   if (entry.command === 'CLEAR_ERROR') return { cmd: 'CLEAR_ERROR', cid: entry.cid };
   if (entry.command === 'SET_SCHEDULE') {
     return { cmd: 'SET_SCHEDULE', h: payload.hour, m: payload.minute,
-      g: payload.grams, on: payload.enabled, cid: entry.cid };
+      g: payload.grams, on: payload.enabled, ts, cid: entry.cid };
   }
   if (entry.command === 'SET_SCHEDULES') {
-    return { cmd: 'SET_SCHEDULES', cid: entry.cid,
+    return { cmd: 'SET_SCHEDULES', ts, cid: entry.cid,
       items: (payload.items || []).map((s) => ({ h: s.hour, m: s.minute, g: s.grams, on: s.enabled })) };
+  }
+  if (entry.command === 'SET_CONFIG') {
+    return { cmd: 'SET_CONFIG', bowl_capacity_g: payload.bowl_capacity_g, cid: entry.cid };
   }
   return null;
 }
@@ -454,8 +485,13 @@ async function flushDeviceCommands(deviceId, socket) {
     }
   }
   if (schedulesAvailable) {
-    socket.send(JSON.stringify({ cmd: 'SET_SCHEDULES', cid: 0,
+    socket.send(JSON.stringify({ cmd: 'SET_SCHEDULES', cid: 0, ts: Math.floor(Date.now() / 1000),
       items: schedules.slice(0, 4).map((s) => ({ h: s.hour, m: s.minute, g: s.grams, on: s.enabled })) }));
+  }
+  const capacity = Number(knownDevices.get(deviceId)?.bowl_capacity_g) || DEFAULT_BOWL_CAPACITY_G;
+  socket.send(JSON.stringify({ cmd: 'SET_CONFIG', cid: 0, bowl_capacity_g: capacity }));
+  if (knownDevices.get(deviceId)?.sim_jam) {
+    socket.send(JSON.stringify({ cmd: 'SIM_JAM', cid: 0, on: true }));
   }
 }
 
@@ -471,12 +507,62 @@ setInterval(() => {
 app.post('/api/feed', auth(['admin', 'owner']), async (req, res) => {
   const deviceId = String(req.body?.device || 'esp01');
   if (!(await requireDeviceAccess(req, res, deviceId))) return;
-  const grams = Math.max(1, Math.min(200, Number(req.body?.grams) || 30));
-  const cmdEntry = enqueueCommand(deviceId, 'FEED', { g: grams });
+  const check = clampFeedGrams(deviceId, req.body?.grams);
+  if (check.rejected) {
+    return res.status(check.status || 400).json({
+      error: check.error,
+      bowl_weight_g: check.bowl_weight_g,
+      bowl_capacity_g: check.bowl_capacity_g,
+    });
+  }
+  const cmdEntry = enqueueCommand(deviceId, 'FEED', { g: check.grams });
   if (!(await saveCommandOrRespond(cmdEntry, res))) return;
   const sent = await dispatchCommand(cmdEntry);
-  console.log(`[CMD] FEED ${grams}g cid=${cmdEntry.cid} (${deviceId}) -> ${sent} thiet bi`);
-  res.json({ ok: sent > 0, sent, grams, cid: cmdEntry.cid });
+  console.log(
+    `[CMD] FEED ${check.grams}g (req=${check.requested}g/${check.bowl_capacity_g}g) ` +
+      `cid=${cmdEntry.cid} (${deviceId}) -> ${sent} thiet bi`
+  );
+  res.json({
+    ok: sent > 0,
+    sent,
+    grams: check.grams,
+    requested_grams: check.requested,
+    clamped: check.clamped,
+    bowl_capacity_g: check.bowl_capacity_g,
+    cid: cmdEntry.cid,
+  });
+});
+
+app.put('/api/devices/:id/config', auth(['admin', 'owner']), async (req, res) => {
+  const deviceId = String(req.params.id || '').trim();
+  if (!deviceId || deviceId.includes('/')) {
+    return res.status(400).json({ error: 'invalid_device_id' });
+  }
+  if (!(await requireDeviceAccess(req, res, deviceId))) return;
+  const raw = Number(req.body?.bowl_capacity_g);
+  if (!Number.isFinite(raw) || raw < 50 || raw > 1000) {
+    return res.status(400).json({ error: 'invalid_bowl_capacity', min: 50, max: 1000 });
+  }
+  const bowl_capacity_g = +raw.toFixed(1);
+  if (firestoreDb) {
+    try {
+      await firestoreDb.collection('devices').doc(deviceId).set(
+        { id: deviceId, bowl_capacity_g },
+        { merge: true }
+      );
+    } catch (error) {
+      console.error('[FIRESTORE:devices] config save:', error.message);
+      return res.status(503).json({ error: 'config_store_unavailable' });
+    }
+  }
+  rememberDevice(deviceId, { bowl_capacity_g });
+  const cmdEntry = enqueueCommand(deviceId, 'SET_CONFIG', { bowl_capacity_g });
+  if (!(await saveCommandOrRespond(cmdEntry, res))) return;
+  const sent = await dispatchCommand(cmdEntry);
+  broadcast({ type: 'device_config', data: { device_id: deviceId, bowl_capacity_g } }, deviceId);
+  broadcastDeviceStatus();
+  console.log(`[CONFIG] ${deviceId} bowl_capacity_g=${bowl_capacity_g} -> ${sent} thiet bi`);
+  return res.json({ ok: true, device_id: deviceId, bowl_capacity_g, sent, cid: cmdEntry.cid });
 });
 
 app.post('/api/stop', auth(['admin', 'owner']), async (req, res) => {
@@ -498,7 +584,7 @@ app.post('/api/schedule', auth(['admin', 'owner']), async (req, res) => {
     enabled: Boolean(body.enabled),
     hour: Math.max(0, Math.min(23, Number(body.hour) || 0)),
     minute: Math.max(0, Math.min(59, Number(body.minute) || 0)),
-    grams: Math.max(1, Math.min(200, Number(body.grams) || 30)),
+    grams: Math.max(1, Math.min(1000, Number(body.grams) || 30)),
   };
   if (!(await persistSchedulesToFirestore(deviceId, [single]))) {
     return res.status(503).json({ error: 'schedule_store_unavailable' });
@@ -524,7 +610,7 @@ app.put('/api/schedules', auth(['admin', 'owner']), async (req, res) => {
   const items = rawItems.slice(0, 4).map((item) => ({
     hour: Math.max(0, Math.min(23, Number(item.hour ?? item.h) || 0)),
     minute: Math.max(0, Math.min(59, Number(item.minute ?? item.m) || 0)),
-    grams: Math.max(1, Math.min(200, Number(item.grams ?? item.g) || 30)),
+    grams: Math.max(1, Math.min(1000, Number(item.grams ?? item.g) || 30)),
     enabled: Boolean(item.enabled ?? item.on ?? true),
   }));
   if (!(await persistSchedulesToFirestore(deviceId, items))) {
@@ -612,6 +698,8 @@ function deviceSnapshot(user = null) {
       return {
         ...publicFields,
         id,
+        bowl_capacity_g: Number(publicFields.bowl_capacity_g) || DEFAULT_BOWL_CAPACITY_G,
+        sim_jam: Boolean(publicFields.sim_jam),
         online: connectedIds.has(id),
         last_seen: knownDevices.get(id)?.last_seen || null,
       };
@@ -664,6 +752,8 @@ async function onTelemetry(socket, message) {
     const pendingOfflineTimer = offlineTimers.get(socket.deviceId);
     if (pendingOfflineTimer) clearTimeout(pendingOfflineTimer);
     offlineTimers.delete(socket.deviceId);
+    // Dong bo gio PC ngay khi thiet bi ket noi (truoc khi cho Firestore truy van).
+    socket.send(JSON.stringify({ ts: Math.floor(Date.now() / 1000) }));
     flushDeviceCommands(socket.deviceId, socket).catch((err) =>
       console.error('[CMD] Không đồng bộ được hàng đợi:', err.message)
     );
@@ -711,7 +801,7 @@ async function onTelemetry(socket, message) {
 
   const packetKey = `${deviceId}:${seq}`;
   if (seenPackets.has(packetKey)) {
-    socket.send(JSON.stringify({ ack: seq }));
+    socket.send(JSON.stringify({ ack: seq, ts: Math.floor(Date.now() / 1000) }));
     return; // đã lưu trước đó (retransmit / sync trùng)
   }
 
@@ -735,6 +825,7 @@ async function onTelemetry(socket, message) {
     last_seen: record.recorded_at,
     bowl_weight_g: record.weight_g,
     food_level: record.food_level,
+    ...(!record.synced ? { error_code: record.error_code } : {}),
   });
 
   // ACK sau khi Firestore hoặc spool cục bộ xác nhận nhận dữ liệu bền.
@@ -753,7 +844,7 @@ async function onTelemetry(socket, message) {
   }
   rememberPacket(packetKey);
   socket.lastSeq = seq;
-  socket.send(JSON.stringify({ ack: seq }));
+  socket.send(JSON.stringify({ ack: seq, ts: Math.floor(Date.now() / 1000) }));
   recentTelemetry.push(record);
   if (recentTelemetry.length > MAX_RECENT) recentTelemetry.shift();
 
@@ -1077,33 +1168,56 @@ async function onDashboardCommand(socket, message) {
     return;
   }
   const cmd = String(message.cmd || '').toUpperCase();
-  if (cmd === 'FEED') {
-    const cmdEntry = enqueueCommand(deviceId, 'FEED', { g: Number(message.g) || 30 });
-    if (!(await persistCommand(cmdEntry))) {
-      pendingCommands.delete(cmdEntry.cid);
-      socket.send(JSON.stringify({ type: 'error', error: 'command_queue_unavailable' }));
-      return;
+  if (cmd === 'SIM_JAM' || cmd === 'SIM_EAT' || cmd === 'SIM_REFILL') {
+    const simOn = Boolean(message.on);
+    const payload = JSON.stringify({
+      cmd,
+      ...(cmd === 'SIM_JAM' ? { on: simOn } : {}),
+      cid: 0,
+    });
+    if (cmd === 'SIM_JAM') {
+      rememberDevice(deviceId, { sim_jam: simOn });
+      broadcastDeviceStatus();
     }
-    await dispatchCommand(cmdEntry);
-  } else if (cmd === 'STOP') {
-    const cmdEntry = enqueueCommand(deviceId, 'STOP', {});
-    if (!(await persistCommand(cmdEntry))) {
-      pendingCommands.delete(cmdEntry.cid);
-      socket.send(JSON.stringify({ type: 'error', error: 'command_queue_unavailable' }));
-      return;
+    let forwarded = 0;
+    for (const dev of deviceSockets) {
+      if (dev.deviceId === deviceId && dev.readyState === WebSocket.OPEN) {
+        dev.send(payload);
+        forwarded++;
+      }
     }
-    await dispatchCommand(cmdEntry);
-  } else if (cmd === 'CLEAR_ERROR') {
-    const cmdEntry = enqueueCommand(deviceId, 'CLEAR_ERROR', {});
-    if (!(await persistCommand(cmdEntry))) {
-      pendingCommands.delete(cmdEntry.cid);
-      socket.send(JSON.stringify({ type: 'error', error: 'command_queue_unavailable' }));
-      return;
-    }
-    await dispatchCommand(cmdEntry);
-  } else {
-    socket.send(JSON.stringify({ type: 'error', error: 'unknown command' }));
+    console.log(`[WOKWI] ${cmd}${cmd === 'SIM_JAM' ? ` on=${simOn}` : ''} (${deviceId}) -> ${forwarded} thiet bi`);
+    return;
   }
+  if (cmd === 'CLEAR_ERROR') {
+    rememberDevice(deviceId, { sim_jam: false, error_code: 0 });
+    broadcastDeviceStatus();
+  }
+  let feedPayload;
+  if (cmd === 'FEED') {
+    const check = clampFeedGrams(deviceId, message.g);
+    if (check.rejected) {
+      socket.send(JSON.stringify({ type: 'error', error: check.error }));
+      return;
+    }
+    feedPayload = { g: check.grams };
+  }
+  const commandPayloads = {
+    FEED: feedPayload,
+    STOP: {},
+    CLEAR_ERROR: {},
+  };
+  if (!(cmd in commandPayloads)) {
+    socket.send(JSON.stringify({ type: 'error', error: 'unknown command' }));
+    return;
+  }
+  const cmdEntry = enqueueCommand(deviceId, cmd, commandPayloads[cmd]);
+  if (!(await persistCommand(cmdEntry))) {
+    pendingCommands.delete(cmdEntry.cid);
+    socket.send(JSON.stringify({ type: 'error', error: 'command_queue_unavailable' }));
+    return;
+  }
+  await dispatchCommand(cmdEntry);
 }
 
 wss.on('connection', async (socket, request) => {

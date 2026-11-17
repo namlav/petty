@@ -18,11 +18,6 @@
         <span id="wsDot" class="dot"></span>
         <span id="wsLabel">Đang kết nối gateway…</span>
       </div>
-      <div class="token-box">
-        <label for="token">JWT token</label>
-        <input id="token" type="password" placeholder="Bỏ trống nếu demo" autocomplete="off">
-        <button id="connectBtn" type="button" class="ghost">Kết nối</button>
-      </div>
     </div>
   </header>
 
@@ -31,7 +26,7 @@
       <article class="card">
         <h2>Khối lượng bát</h2>
         <p class="value"><span id="weight">--</span><small>g</small></p>
-        <p class="muted">Loadcell HX711 · Median + EMA</p>
+        <p class="muted">Dung tích bát: <strong id="bowlCapLabel">120</strong> g · HX711</p>
       </article>
       <article class="card">
         <h2>Hạt trong thùng</h2>
@@ -58,10 +53,22 @@
       <div class="controls">
         <label class="field">
           Khẩu phần (g)
-          <input id="feedGrams" type="number" min="1" max="200" value="30">
+          <input id="feedGrams" type="number" min="1" max="1000" value="30">
         </label>
         <button id="feedBtn" type="button" class="primary">🍖 Cho ăn ngay</button>
         <button id="stopBtn" type="button" class="danger">🛑 Dừng khẩn cấp</button>
+        <button id="clearErrorBtn" type="button" class="ghost">🧹 Xóa lỗi</button>
+        <button id="simEatBtn" type="button" class="ghost">🐾 Thú cưng ăn</button>
+        <button id="simRefillBtn" type="button" class="ghost">🌾 Đổ đầy bồn</button>
+        <label class="check">
+          <input id="simJamCheck" type="checkbox">
+          Giả lập kẹt hạt
+        </label>
+        <label class="field">
+          Dung tích bát (g)
+          <input id="bowlCapacity" type="number" min="50" max="1000" value="120">
+        </label>
+        <button id="saveCapacityBtn" type="button" class="ghost">Lưu bát</button>
       </div>
       <form id="scheduleForm" class="schedule">
         <label class="field">
@@ -70,7 +77,7 @@
         </label>
         <label class="field">
           Mục tiêu (g)
-          <input id="schedGrams" type="number" min="1" max="200" value="30">
+          <input id="schedGrams" type="number" min="1" max="1000" value="30">
         </label>
         <label class="check">
           <input id="schedEnabled" type="checkbox">

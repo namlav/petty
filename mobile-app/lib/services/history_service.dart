@@ -23,6 +23,7 @@ class ConsumptionBucket {
 
 /// [SV3: T-SV3-05 / T-SV3-06] Đọc lịch sử telemetry, thống kê, lịch ăn và cảnh báo.
 class HistoryService {
+  static const Duration _timeout = Duration(seconds: 8);
   final String httpBaseUrl;
   String token;
 
@@ -33,10 +34,9 @@ class HistoryService {
       };
 
   Future<List<DeviceInfo>> fetchDevices() async {
-    final resp = await http.get(
-      Uri.parse('$httpBaseUrl/api/devices'),
-      headers: _headers,
-    );
+    final resp = await http
+        .get(Uri.parse('$httpBaseUrl/api/devices'), headers: _headers)
+        .timeout(_timeout);
     if (resp.statusCode != 200) throw Exception('HTTP ${resp.statusCode}');
     final body = jsonDecode(resp.body) as Map<String, dynamic>;
     return (body['data'] as List? ?? [])
@@ -51,7 +51,7 @@ class HistoryService {
     final uri = Uri.parse(
       '$httpBaseUrl/api/telemetry?device=$deviceId&limit=$limit',
     );
-    final resp = await http.get(uri, headers: _headers);
+    final resp = await http.get(uri, headers: _headers).timeout(_timeout);
     if (resp.statusCode != 200) throw Exception('HTTP ${resp.statusCode}');
     final body = jsonDecode(resp.body) as Map<String, dynamic>;
     return (body['data'] as List? ?? [])
@@ -66,7 +66,7 @@ class HistoryService {
     final uri = Uri.parse(
       '$httpBaseUrl/api/stats?device=$deviceId&range=$range',
     );
-    final resp = await http.get(uri, headers: _headers);
+    final resp = await http.get(uri, headers: _headers).timeout(_timeout);
     if (resp.statusCode != 200) throw Exception('HTTP ${resp.statusCode}');
     final body = jsonDecode(resp.body) as Map<String, dynamic>;
     return (body['data'] as List? ?? [])
@@ -77,7 +77,7 @@ class HistoryService {
 
   Future<List<FeedingScheduleItem>> fetchSchedules(String deviceId) async {
     final uri = Uri.parse('$httpBaseUrl/api/schedules?device=$deviceId');
-    final resp = await http.get(uri, headers: _headers);
+    final resp = await http.get(uri, headers: _headers).timeout(_timeout);
     if (resp.statusCode != 200) throw Exception('HTTP ${resp.statusCode}');
     final body = jsonDecode(resp.body) as Map<String, dynamic>;
     return (body['data'] as List? ?? [])
@@ -88,7 +88,7 @@ class HistoryService {
 
   Future<List<AlertItem>> fetchAlerts(String deviceId) async {
     final uri = Uri.parse('$httpBaseUrl/api/alerts?device=$deviceId');
-    final resp = await http.get(uri, headers: _headers);
+    final resp = await http.get(uri, headers: _headers).timeout(_timeout);
     if (resp.statusCode != 200) throw Exception('HTTP ${resp.statusCode}');
     final body = jsonDecode(resp.body) as Map<String, dynamic>;
     return (body['data'] as List? ?? [])

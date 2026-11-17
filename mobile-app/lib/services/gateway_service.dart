@@ -25,7 +25,8 @@ class GatewayService {
   final void Function(List<DeviceInfo> devices) onDevices;
   final void Function(TelemetryPoint point) onTelemetry;
   final void Function(List<FeedingScheduleItem> schedules) onSchedules;
-  final void Function(AlertItem alert) onAlert;
+  final void Function(AlertItem alert, {bool isLive}) onAlert;
+  final void Function(String deviceId, double bowlCapacityG)? onDeviceConfig;
 
   GatewayService({
     required this.httpBaseUrl,
@@ -36,6 +37,7 @@ class GatewayService {
     required this.onTelemetry,
     required this.onSchedules,
     required this.onAlert,
+    this.onDeviceConfig,
   });
 
   Map<String, String> get _headers => {
@@ -48,33 +50,46 @@ class GatewayService {
     _openSocket();
   }
 
-  void _openSocket() {
+  static const Duration _httpTimeout = Duration(seconds: 8);
+
+  Future<void> _openSocket() async {
     if (_disposed) return;
     _sub?.cancel();
     _channel?.sink.close();
+    onConnectionChanged(false, 'Đang kết nối Gateway...');
 
     final sep = wsBaseUrl.contains('?') ? '&' : '?';
     final uri = Uri.parse(
       '$wsBaseUrl${sep}role=dashboard&token=${Uri.encodeQueryComponent(token)}',
     );
     try {
-      _channel = WebSocketChannel.connect(uri);
-      onConnectionChanged(true, null);
-      _sub = _channel!.stream.listen(
+      final channel = WebSocketChannel.connect(uri);
+      _channel = channel;
+      _sub = channel.stream.listen(
         (raw) {
           _retrySeconds = 1;
           _handleMessage(raw.toString());
         },
         onError: (err) {
+          if (_channel != channel) return;
           onConnectionChanged(false, err.toString());
           _scheduleReconnect();
         },
         onDone: () {
+          if (_channel != channel) return;
           onConnectionChanged(false, 'Mất kết nối Gateway');
           _scheduleReconnect();
         },
       );
+      await channel.ready.timeout(_httpTimeout);
+      if (_disposed || _channel != channel) return;
+      _retrySeconds = 1;
+      onConnectionChanged(true, null);
     } catch (e) {
+      if (_disposed) return;
+      _sub?.cancel();
+      _channel?.sink.close();
+      _channel = null;
       onConnectionChanged(false, e.toString());
       _scheduleReconnect();
     }
@@ -137,27 +152,41 @@ class GatewayService {
           onAlert(
             AlertItem.fromJson(
                 Map<String, dynamic>.from(decoded['data'] as Map)),
+            isLive: true,
           );
+        }
+        break;
+      case 'device_config':
+        if (decoded['data'] is Map) {
+          final data = Map<String, dynamic>.from(decoded['data'] as Map);
+          final cap = (data['bowl_capacity_g'] as num?)?.toDouble();
+          if (cap != null) {
+            onDeviceConfig?.call((data['device_id'] ?? '').toString(), cap);
+          }
         }
         break;
     }
   }
 
   Future<Map<String, dynamic>> feedNow(String deviceId, double grams) async {
-    final resp = await http.post(
-      Uri.parse('$httpBaseUrl/api/feed'),
-      headers: _headers,
-      body: jsonEncode({'device': deviceId, 'grams': grams}),
-    );
+    final resp = await http
+        .post(
+          Uri.parse('$httpBaseUrl/api/feed'),
+          headers: _headers,
+          body: jsonEncode({'device': deviceId, 'grams': grams}),
+        )
+        .timeout(_httpTimeout);
     return _decodeOrThrow(resp);
   }
 
   Future<Map<String, dynamic>> stopFeeding(String deviceId) async {
-    final resp = await http.post(
-      Uri.parse('$httpBaseUrl/api/stop'),
-      headers: _headers,
-      body: jsonEncode({'device': deviceId}),
-    );
+    final resp = await http
+        .post(
+          Uri.parse('$httpBaseUrl/api/stop'),
+          headers: _headers,
+          body: jsonEncode({'device': deviceId}),
+        )
+        .timeout(_httpTimeout);
     return _decodeOrThrow(resp);
   }
 
@@ -165,19 +194,35 @@ class GatewayService {
     String deviceId,
     List<FeedingScheduleItem> items,
   ) async {
-    final resp = await http.put(
-      Uri.parse('$httpBaseUrl/api/schedules'),
-      headers: _headers,
-      body: jsonEncode({
-        'device': deviceId,
-        'items': items.map((e) => e.toJson()).toList(),
-      }),
-    );
+    final resp = await http
+        .put(
+          Uri.parse('$httpBaseUrl/api/schedules'),
+          headers: _headers,
+          body: jsonEncode({
+            'device': deviceId,
+            'items': items.map((e) => e.toJson()).toList(),
+          }),
+        )
+        .timeout(_httpTimeout);
     final body = _decodeOrThrow(resp);
     return (body['items'] as List? ?? [])
         .map((e) =>
             FeedingScheduleItem.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
+  }
+
+  Future<Map<String, dynamic>> updateDeviceConfig(
+    String deviceId, {
+    required double bowlCapacityG,
+  }) async {
+    final resp = await http
+        .put(
+          Uri.parse('$httpBaseUrl/api/devices/${Uri.encodeComponent(deviceId)}/config'),
+          headers: _headers,
+          body: jsonEncode({'bowl_capacity_g': bowlCapacityG}),
+        )
+        .timeout(_httpTimeout);
+    return _decodeOrThrow(resp);
   }
 
   void clearError(String deviceId) {
@@ -187,6 +232,14 @@ class GatewayService {
   Map<String, dynamic> _decodeOrThrow(http.Response resp) {
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      if (map['error'] == 'bowl_full') {
+        final w = (map['bowl_weight_g'] as num?)?.toStringAsFixed(1) ?? '?';
+        final c = (map['bowl_capacity_g'] as num?)?.toStringAsFixed(0) ?? '?';
+        throw Exception('Bát đã đầy ($w / $c g), không thể xả thêm');
+      }
+      if (map['error'] == 'device_jammed') {
+        throw Exception('Thiết bị đang bị kẹt hạt, hãy kiểm tra và Xoá lỗi trước');
+      }
       throw Exception(map['error'] ?? 'HTTP ${resp.statusCode}');
     }
     return map;

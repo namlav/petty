@@ -1,4 +1,6 @@
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
 import '../models/alert.dart';
@@ -29,6 +31,7 @@ class AppState extends ChangeNotifier {
   List<ConsumptionBucket> stats = const [];
   String statsRange = '24h';
   final List<AlertItem> alerts = [];
+  AlertItem? pendingLiveAlert;
 
   GatewayService? _gateway;
   HistoryService? _history;
@@ -40,12 +43,45 @@ class AppState extends ChangeNotifier {
       devices.any((d) => d.id == selectedDeviceId && d.online) ||
       (latest != null && latest!.status != 3);
 
+  double get bowlCapacityG {
+    for (final d in devices) {
+      if (d.id == selectedDeviceId) return d.bowlCapacityG;
+    }
+    return 120;
+  }
+
+  static const _kHttpUrlKey = 'petty.gateway_http_url';
+  static const _kWsUrlKey = 'petty.gateway_ws_url';
+
   Future<void> init() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedHttp = prefs.getString(_kHttpUrlKey);
+    final savedWs = prefs.getString(_kWsUrlKey);
+    if (savedHttp != null && savedHttp.isNotEmpty) {
+      gatewayHttpUrl = savedHttp;
+    } else if (await _isReachable('http://127.0.0.1:8080/api/health')) {
+      gatewayHttpUrl = 'http://127.0.0.1:8080';
+      if (savedWs == null || savedWs.isEmpty) {
+        gatewayWsUrl = 'ws://127.0.0.1:8080/ws';
+      }
+    }
+    if (savedWs != null && savedWs.isNotEmpty) gatewayWsUrl = savedWs;
+
     session = await _authService.restoreSession();
     if (session != null) {
       _connectServices();
     }
     notifyListeners();
+  }
+
+  Future<bool> _isReachable(String url) async {
+    try {
+      final resp =
+          await http.get(Uri.parse(url)).timeout(const Duration(seconds: 2));
+      return resp.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> signIn({
@@ -86,9 +122,15 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void updateGatewayUrls({required String httpUrl, required String wsUrl}) {
+  Future<void> updateGatewayUrls({
+    required String httpUrl,
+    required String wsUrl,
+  }) async {
     gatewayHttpUrl = httpUrl.trim();
     gatewayWsUrl = wsUrl.trim();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kHttpUrlKey, gatewayHttpUrl);
+    await prefs.setString(_kWsUrlKey, gatewayWsUrl);
     if (session != null) {
       _connectServices();
     }
@@ -132,13 +174,37 @@ class AppState extends ChangeNotifier {
         schedules = list;
         notifyListeners();
       },
-      onAlert: (alert) {
-        if (!alerts.any((a) => a.id == alert.id)) {
+      onAlert: (alert, {bool isLive = false}) {
+        final isNew = !alerts.any((a) => a.id == alert.id);
+        if (isNew) {
           alerts.insert(0, alert);
+        }
+        if (isLive && alert.deviceId == selectedDeviceId && alert.kind != 'ONLINE') {
+          pendingLiveAlert = alert;
+        }
+        if (isNew || (isLive && pendingLiveAlert == alert)) {
           notifyListeners();
         }
       },
+      onDeviceConfig: (deviceId, capacity) {
+        _applyBowlCapacity(deviceId, capacity);
+      },
     )..connect();
+  }
+
+  void _applyBowlCapacity(String deviceId, double capacity) {
+    final idx = devices.indexWhere((d) => d.id == deviceId);
+    if (idx >= 0) {
+      devices[idx] = devices[idx].copyWith(bowlCapacityG: capacity);
+    } else {
+      devices.add(DeviceInfo(
+        id: deviceId,
+        name: 'Pet Feeder - $deviceId',
+        online: isDeviceOnline,
+        bowlCapacityG: capacity,
+      ));
+    }
+    notifyListeners();
   }
 
   Future<void> refreshAll() async {
@@ -182,9 +248,24 @@ class AppState extends ChangeNotifier {
     final gw = _gateway;
     if (gw == null) return 'Chưa kết nối Gateway';
     final res = await gw.feedNow(selectedDeviceId, grams);
-    return res['ok'] == true
-        ? 'Đã gửi lệnh cho ăn ${grams.toStringAsFixed(0)} g'
-        : 'Thiết bị đang offline, chưa nhận lệnh';
+    if (res['ok'] != true) {
+      return 'Thiết bị đang offline, chưa nhận lệnh';
+    }
+    final actual = (res['grams'] as num?)?.toDouble() ?? grams;
+    if (res['clamped'] == true) {
+      final cap = (res['bowl_capacity_g'] as num?)?.toDouble() ?? bowlCapacityG;
+      return 'Bát sắp đầy: tự cắt còn ${actual.toStringAsFixed(0)} g (vừa đầy ${cap.toStringAsFixed(0)} g)';
+    }
+    return 'Đã gửi lệnh cho ăn ${actual.toStringAsFixed(0)} g';
+  }
+
+  Future<double> updateBowlCapacity(double grams) async {
+    final gw = _gateway;
+    if (gw == null) throw Exception('Chưa kết nối Gateway');
+    final res = await gw.updateDeviceConfig(selectedDeviceId, bowlCapacityG: grams);
+    final updated = (res['bowl_capacity_g'] as num?)?.toDouble() ?? grams;
+    _applyBowlCapacity(selectedDeviceId, updated);
+    return updated;
   }
 
   Future<String> stopFeeding() async {
@@ -201,6 +282,12 @@ class AppState extends ChangeNotifier {
     if (gw == null) return;
     schedules = await gw.saveSchedules(selectedDeviceId, items);
     notifyListeners();
+  }
+
+  void clearPendingLiveAlert() {
+    if (pendingLiveAlert != null) {
+      pendingLiveAlert = null;
+    }
   }
 
   void clearError() {
