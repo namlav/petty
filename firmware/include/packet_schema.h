@@ -81,6 +81,10 @@ enum CommandType : uint8_t {
   CMD_SET_SCHEDULE,
   CMD_CLEAR_ERROR,
   CMD_SET_SCHEDULES,
+  CMD_SIM_JAM,
+  CMD_SIM_EAT,
+  CMD_SET_CONFIG,
+  CMD_SIM_REFILL,
 };
 
 struct ScheduleSlot {
@@ -95,6 +99,7 @@ struct Command {
   uint32_t cid = 0;  // ID lệnh (device_commands.id), 0 nếu không yêu cầu cack
   bool expired = false;
   float grams = FEED_TARGET_GRAMS;
+  float bowlCapacity = BOWL_FULL_GRAMS;
   uint8_t hour = 0;
   uint8_t minute = 0;
   bool enabled = false;

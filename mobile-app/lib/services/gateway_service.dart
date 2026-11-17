@@ -26,6 +26,7 @@ class GatewayService {
   final void Function(TelemetryPoint point) onTelemetry;
   final void Function(List<FeedingScheduleItem> schedules) onSchedules;
   final void Function(AlertItem alert) onAlert;
+  final void Function(String deviceId, double bowlCapacityG)? onDeviceConfig;
 
   GatewayService({
     required this.httpBaseUrl,
@@ -36,6 +37,7 @@ class GatewayService {
     required this.onTelemetry,
     required this.onSchedules,
     required this.onAlert,
+    this.onDeviceConfig,
   });
 
   Map<String, String> get _headers => {
@@ -140,6 +142,15 @@ class GatewayService {
           );
         }
         break;
+      case 'device_config':
+        if (decoded['data'] is Map) {
+          final data = Map<String, dynamic>.from(decoded['data'] as Map);
+          final cap = (data['bowl_capacity_g'] as num?)?.toDouble();
+          if (cap != null) {
+            onDeviceConfig?.call((data['device_id'] ?? '').toString(), cap);
+          }
+        }
+        break;
     }
   }
 
@@ -180,6 +191,18 @@ class GatewayService {
         .toList();
   }
 
+  Future<Map<String, dynamic>> updateDeviceConfig(
+    String deviceId, {
+    required double bowlCapacityG,
+  }) async {
+    final resp = await http.put(
+      Uri.parse('$httpBaseUrl/api/devices/${Uri.encodeComponent(deviceId)}/config'),
+      headers: _headers,
+      body: jsonEncode({'bowl_capacity_g': bowlCapacityG}),
+    );
+    return _decodeOrThrow(resp);
+  }
+
   void clearError(String deviceId) {
     _channel?.sink.add(jsonEncode({'cmd': 'CLEAR_ERROR', 'device': deviceId}));
   }
@@ -187,6 +210,11 @@ class GatewayService {
   Map<String, dynamic> _decodeOrThrow(http.Response resp) {
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      if (map['error'] == 'bowl_full') {
+        final w = (map['bowl_weight_g'] as num?)?.toStringAsFixed(1) ?? '?';
+        final c = (map['bowl_capacity_g'] as num?)?.toStringAsFixed(0) ?? '?';
+        throw Exception('Bát đã đầy ($w / $c g), không thể xả thêm');
+      }
       throw Exception(map['error'] ?? 'HTTP ${resp.statusCode}');
     }
     return map;

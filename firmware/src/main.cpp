@@ -41,6 +41,12 @@ FeedSource g_feedSource = FEED_SRC_NONE;
 uint32_t g_sequence = 0;
 bool g_feeding = false;
 float g_targetWeight = 0;
+float g_bowlCapacity = BOWL_FULL_GRAMS;
+#ifdef PETTY_USE_WOKWI_PRIVATE_GW
+float g_simBowlAdd = 0.0f;
+float g_simDispensedTotal = 0.0f;
+uint8_t g_simRefillBoost = 0;
+#endif
 
 // ---------------- Tiện ích thời gian ----------------
 uint32_t nowTimestamp() {
@@ -73,6 +79,16 @@ uint8_t readFoodLevel() {
   const float ratio = (TANK_HEIGHT_CM - distance) /
                       (TANK_HEIGHT_CM - TANK_FULL_DISTANCE_CM);
   return (uint8_t)constrain(ratio * 100.0f, 0.0f, 100.0f);
+}
+
+uint8_t readEffectiveFoodLevel() {
+  uint8_t lvl = readFoodLevel();
+#ifdef PETTY_USE_WOKWI_PRIVATE_GW
+  const uint8_t boosted = (uint8_t)min(100, (int)lvl + (int)g_simRefillBoost);
+  const uint8_t drop = (uint8_t)(g_simDispensedTotal / 10.0f);
+  lvl = (boosted > drop) ? (uint8_t)(boosted - drop) : 0;
+#endif
+  return lvl;
 }
 
 // ---------------- Âm thanh ----------------
@@ -132,10 +148,17 @@ void startFeeding(float grams, FeedSource source) {
     Serial.println("[FEED] Dang cho an, bo qua yeu cau");
     return;
   }
-  if (g_weight > BOWL_FULL_GRAMS) {
-    Serial.println("[FEED] Tu choi: bat an con day (chong tran)");
+  if (g_weight >= g_bowlCapacity) {
+    Serial.printf("[FEED] Tu choi: bat an da day (%.1f/%.1f g)\n",
+                  (double)g_weight, (double)g_bowlCapacity);
     beepReject();
     return;
+  }
+  const float avail = g_bowlCapacity - g_weight;
+  const float actualGrams = (grams > avail) ? avail : grams;
+  if (actualGrams < grams) {
+    Serial.printf("[FEED] Cat giam %.1f -> %.1f g theo dung tich bat %.1f g\n",
+                  (double)grams, (double)actualGrams, (double)g_bowlCapacity);
   }
   if (g_level < 5) {
     Serial.println("[FEED] Tu choi: thung het hat");
@@ -151,7 +174,7 @@ void startFeeding(float grams, FeedSource source) {
   g_error = ERR_NONE;
   g_feedSource = source;
   g_feeding = true;
-  g_targetWeight = g_weight + grams;
+  g_targetWeight = g_weight + actualGrams;
   motor.startFeed();
   beepFeed();
   Serial.printf("[FEED] Bat dau (%s) muc tieu %.1f g\n", feedSourceName(source),
@@ -163,6 +186,15 @@ void finishFeeding(bool success) {
   g_feeding = false;
   motor.stop();
   if (success) {
+#ifdef PETTY_USE_WOKWI_PRIVATE_GW
+    if (g_weight < g_targetWeight) {
+      const float added = max(0.0f, g_targetWeight - g_weight);
+      g_simBowlAdd += added;
+      g_simDispensedTotal += added;
+      g_weight += added;
+      g_level = readEffectiveFoodLevel();
+    }
+#endif
     Serial.println("[FEED] Hoan tat chu trinh");
     publishEvent(ST_IDLE, ERR_NONE);
   }
@@ -213,11 +245,28 @@ void loadSchedulesFromNvs() {
     snprintf(key, sizeof(key), "m%u", (unsigned)i);
     schedules[i].minute = min(schedulePrefs.getUChar(key, 0), (uint8_t)59);
     snprintf(key, sizeof(key), "g%u", (unsigned)i);
-    schedules[i].grams = constrain(schedulePrefs.getFloat(key, FEED_TARGET_GRAMS), 1.0f, 200.0f);
+    schedules[i].grams = constrain(schedulePrefs.getFloat(key, FEED_TARGET_GRAMS), 1.0f, 1000.0f);
     snprintf(key, sizeof(key), "f%u", (unsigned)i);
     schedules[i].lastFiredSlot = schedulePrefs.getInt(key, -1);
   }
   Serial.printf("[SCHEDULE] Da nap %u lich tu NVS\n", (unsigned)scheduleCount);
+}
+
+void saveBowlCapacityToNvs(float grams) {
+  Preferences calPrefs;
+  if (calPrefs.begin(NVS_NAMESPACE_CAL, false)) {
+    calPrefs.putFloat("bowl_cap", grams);
+    calPrefs.end();
+  }
+}
+
+void loadBowlCapacityFromNvs() {
+  Preferences calPrefs;
+  if (calPrefs.begin(NVS_NAMESPACE_CAL, true)) {
+    g_bowlCapacity = constrain(calPrefs.getFloat("bowl_cap", BOWL_FULL_GRAMS), 50.0f, 1000.0f);
+    calPrefs.end();
+  }
+  Serial.printf("[CONFIG] Dung tich bat: %.1f g\n", (double)g_bowlCapacity);
 }
 
 // ---------------- Lịch hẹn giờ ----------------
@@ -347,7 +396,7 @@ void handleCommands() {
         schedules[0].grams = command.grams;
         schedules[0].lastFiredSlot = -1;
         saveSchedulesToNvs();
-        Serial.printf("[SCHEDULE] %s %02u:%02u - %.1f g\n",
+        Serial.printf("[SCHEDULE] %s %02u:%02u - %.1f g (ESP clock synced)\n",
                       schedules[0].enabled ? "ON" : "OFF",
                       (unsigned)schedules[0].hour, (unsigned)schedules[0].minute,
                       (double)schedules[0].grams);
@@ -367,7 +416,39 @@ void handleCommands() {
       case CMD_CLEAR_ERROR:
         g_error = ERR_NONE;
         motor.clearJam();
+        motor.setSimulatedJam(false);
         Serial.println("[CMD] Xoa loi");
+        publishEvent(currentStatus(), g_error);
+        break;
+      case CMD_SIM_JAM:
+        motor.setSimulatedJam(command.enabled);
+        Serial.printf("[WOKWI] Che do ket hat: %s\n",
+                      command.enabled ? "BAT (se ket)" : "TAT (binh thuong)");
+        break;
+      case CMD_SIM_EAT:
+#ifdef PETTY_USE_WOKWI_PRIVATE_GW
+        g_simBowlAdd = 0.0f;
+        g_weight = max(0.0f, loadCell.value());
+        Serial.println("[WOKWI] Thu cung da an het bat (0.0 g)");
+        publishEvent(currentStatus(), g_error);
+#endif
+        break;
+      case CMD_SET_CONFIG:
+        g_bowlCapacity = constrain(command.bowlCapacity, 50.0f, 1000.0f);
+        saveBowlCapacityToNvs(g_bowlCapacity);
+        Serial.printf("[CONFIG] Cap nhat dung tich bat: %.1f g\n", (double)g_bowlCapacity);
+        break;
+      case CMD_SIM_REFILL:
+#ifdef PETTY_USE_WOKWI_PRIVATE_GW
+        g_simDispensedTotal = 0.0f;
+        g_simRefillBoost = (uint8_t)max(0, 100 - (int)readFoodLevel());
+        g_level = 100;
+        if (g_error == ERR_EMPTY_TANK) {
+          g_error = ERR_NONE;
+        }
+        Serial.println("[WOKWI] Da do day bon hat gia lap (100%)");
+        publishEvent(currentStatus(), g_error);
+#endif
         break;
       default:
         ok = false;
@@ -478,6 +559,7 @@ void setup() {
   xTaskCreatePinnedToCore(motorLoopTask, "motor", 4096, nullptr, 2, nullptr, 1);
   ringBuffer.begin();
   loadSchedulesFromNvs();
+  loadBowlCapacityFromNvs();
   wsManager.begin(&ringBuffer);
 
   // Giờ Việt Nam (UTC+7) cho lịch hẹn ăn.
@@ -495,11 +577,13 @@ void loop() {
   static uint32_t lastSensorMs = 0;
   if (millis() - lastSensorMs >= SENSOR_INTERVAL_MS) {
     lastSensorMs = millis();
-    g_weight = loadCell.update();
-    if (g_weight < 0) {
-      g_weight = 0;
-    }
-    g_level = readFoodLevel();
+    float w = loadCell.update();
+    const uint8_t lvl = readEffectiveFoodLevel();
+#ifdef PETTY_USE_WOKWI_PRIVATE_GW
+    w += g_simBowlAdd;
+#endif
+    g_weight = (w < 0) ? 0.0f : w;
+    g_level = lvl;
 
     if (loadCell.isFaulty()) {
       if (g_error != ERR_SENSOR_FAULT) {
@@ -535,8 +619,8 @@ void loop() {
   if (g_feeding) {
     if (!motor.isFeeding() && !motor.isJammed()) {
       finishFeeding(true);  // LIMIT_SW báo hoàn tất một chu kỳ
-    } else if (g_weight >= g_targetWeight) {
-      finishFeeding(true);  // đủ khẩu phần theo loadcell
+    } else if (g_weight >= g_targetWeight || g_weight >= g_bowlCapacity) {
+      finishFeeding(true);  // đủ khẩu phần hoặc chạm dung tích bát
     }
   }
 

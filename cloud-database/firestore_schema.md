@@ -21,6 +21,7 @@ Trạng thái thời gian thực và quyền sở hữu từng thiết bị.
 * `online`: `boolean` (cập nhật khi thiết bị WS connect/close và quét stale 60s trên Gateway)
 * `last_seen`: `timestamp / ISO-8601 string`
 * `portion_grams`: `number` (mặc định `30.0`)
+* `bowl_capacity_g`: `number` (mặc định `120.0`, ngưỡng chống tràn 50–1000 g)
 * `bowl_weight_g`: `number`
 * `food_level`: `number` (`0..100`)
 

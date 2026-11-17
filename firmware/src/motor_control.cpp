@@ -53,6 +53,14 @@ void MotorControl::update() {
         _enable(false);
         _state = MOTOR_IDLE;
         Serial.println("[MOTOR] LIMIT_SW cham - hoan tat 1 chu ky xa");
+#ifdef PETTY_USE_WOKWI_PRIVATE_GW
+      } else if (!_simJam && millis() - _cycleStart >= 1800) {
+        // Wokwi khong co hat roi that len loadcell; mac dinh hoan tat chu ky sau 1.8s.
+        _halt();
+        _enable(false);
+        _state = MOTOR_IDLE;
+        Serial.println("[MOTOR] Wokwi: hoan tat chu ky xa (khong ket)");
+#endif
       } else if (millis() - _cycleStart >= FEED_TIMEOUT_MS) {
         // Qua 2.5s chua co phan hoi hanh trinh => nghi ket, lui 60 do.
         _halt();

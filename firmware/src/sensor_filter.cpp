@@ -4,7 +4,7 @@
 
 void SensorFilter::begin() {
   Preferences calPrefs;
-  if (calPrefs.begin(NVS_NAMESPACE_CAL, true)) {
+  if (calPrefs.begin(NVS_NAMESPACE_CAL, false)) {
     const float saved = calPrefs.getFloat("scale", HX711_COUNTS_PER_GRAM);
     calPrefs.end();
     if (isfinite(saved) && saved > 0.0f) {

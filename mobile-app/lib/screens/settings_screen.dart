@@ -14,6 +14,10 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _httpCtrl;
   late final TextEditingController _wsCtrl;
+  late final TextEditingController _bowlCapCtrl;
+  String? _syncedDeviceId;
+  double? _syncedBowlCap;
+  bool _savingConfig = false;
 
   @override
   void initState() {
@@ -21,12 +25,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final state = context.read<AppState>();
     _httpCtrl = TextEditingController(text: state.gatewayHttpUrl);
     _wsCtrl = TextEditingController(text: state.gatewayWsUrl);
+    _syncedDeviceId = state.selectedDeviceId;
+    _syncedBowlCap = state.bowlCapacityG;
+    _bowlCapCtrl = TextEditingController(text: state.bowlCapacityG.toStringAsFixed(0));
   }
 
   @override
   void dispose() {
     _httpCtrl.dispose();
     _wsCtrl.dispose();
+    _bowlCapCtrl.dispose();
     super.dispose();
   }
 
@@ -34,6 +42,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final session = state.session;
+    final canControl = session?.canControl ?? false;
+    if (state.selectedDeviceId != _syncedDeviceId ||
+        state.bowlCapacityG != _syncedBowlCap) {
+      final currentCap = _syncedBowlCap?.toStringAsFixed(0);
+      if (state.selectedDeviceId != _syncedDeviceId ||
+          _bowlCapCtrl.text == currentCap) {
+        _bowlCapCtrl.text = state.bowlCapacityG.toStringAsFixed(0);
+      }
+      _syncedDeviceId = state.selectedDeviceId;
+      _syncedBowlCap = state.bowlCapacityG;
+    }
     final deviceIds = {
       state.selectedDeviceId,
       ...state.devices.map((d) => d.id),
@@ -75,6 +94,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (v) {
                     if (v != null) state.selectDevice(v);
                   },
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _bowlCapCtrl,
+                        enabled: canControl && !_savingConfig,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Dung tích bát tối đa (50–1000 g)',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.tonal(
+                      onPressed: canControl && !_savingConfig
+                          ? () async {
+                              final cap = double.tryParse(_bowlCapCtrl.text.trim());
+                              if (cap == null || cap < 50 || cap > 1000) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Dung tích bát phải từ 50 đến 1000 g'),
+                                  ),
+                                );
+                                return;
+                              }
+                              setState(() => _savingConfig = true);
+                              try {
+                                final saved = await state.updateBowlCapacity(cap);
+                                if (!context.mounted) return;
+                                _bowlCapCtrl.text = saved.toStringAsFixed(0);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Đã lưu dung tích bát: ${saved.toStringAsFixed(0)} g'),
+                                  ),
+                                );
+                              } catch (e) {
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Lỗi: $e')),
+                                );
+                              } finally {
+                                if (mounted) setState(() => _savingConfig = false);
+                              }
+                            }
+                          : null,
+                      child: const Text('Lưu bát'),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
                 TextField(
